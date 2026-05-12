@@ -1,0 +1,2566 @@
+import tkinter as tk
+from tkinter import filedialog
+from PIL import Image, ImageTk
+import threading
+import os, sys, datetime, calendar, time, json
+sys.path.insert(0, os.path.expanduser("~/vision_assistant"))
+
+from config import SCREENSHOT_PATH
+
+# Page data cache - avoid repeated DB queries
+_PAGE_CACHE = {}
+_PAGE_CACHE_TIME = {}
+CACHE_TTL = 30  # seconds
+
+def _cached(key, fn):
+    import time
+    now = time.time()
+    if key not in _PAGE_CACHE or now - _PAGE_CACHE_TIME.get(key,0) > CACHE_TTL:
+        _PAGE_CACHE[key] = fn()
+        _PAGE_CACHE_TIME[key] = now
+    return _PAGE_CACHE[key]
+
+def _invalidate_cache(key=None):
+    if key:
+        _PAGE_CACHE.pop(key,None)
+        _PAGE_CACHE_TIME.pop(key,None)
+    else:
+        _PAGE_CACHE.clear()
+        _PAGE_CACHE_TIME.clear()
+from ai import ask, fetch_available_models, parse_task, execute_task
+from memory import (
+    update_goal_status, get_habit_completions_count, complete_habit_once, update_habit_target,
+    save_journal_entry, update_journal_entry, delete_journal_entry, get_journal_entries,
+    add_habit, update_habit, delete_habit, get_habits, complete_habit, habit_done_today,
+    add_goal, update_goal, complete_goal, delete_goal, get_goals,
+    add_calendar_event, update_calendar_event, delete_calendar_event, get_calendar_events
+)
+
+# ── Settings file ─────────────────────────────────────────────
+SETTINGS_PATH = os.path.expanduser("~/vision_assistant/settings.json")
+
+def load_settings():
+    try:
+        with open(SETTINGS_PATH) as f:
+            return json.load(f)
+    except:
+        return {"time_format": "12h", "default_model": ""}
+
+def save_settings(s):
+    with open(SETTINGS_PATH, "w") as f:
+        json.dump(s, f, indent=2)
+
+SETTINGS = load_settings()
+
+# ── Themes ───────────────────────────────────────────────────
+THEMES = {
+    "dark": {
+        "BG":"#0d0d0f","BG2":"#13131a","BG3":"#1a1a24","BG4":"#20202e",
+        "PANEL":"#111118","BORDER":"#2a2a3a",
+        "TEXT":"#e8e8f0","TEXT2":"#888899","TEXT3":"#555566",
+        "ACCENT2":"#4fc3f7","ACCENT3":"#a5d6a7",
+        "WARN":"#ffcc80","DANGER":"#f28b82",
+    },
+    "terminal": {
+        "BG":"#0a0a0a","BG2":"#111111","BG3":"#181818","BG4":"#202020",
+        "PANEL":"#080808","BORDER":"#2a2a2a",
+        "TEXT":"#e0e0e0","TEXT2":"#888888","TEXT3":"#555555",
+        "ACCENT2":"#00ff88","ACCENT3":"#00cc44",
+        "WARN":"#ff8800","DANGER":"#ff3300",
+    },
+    "oled": {
+        "BG":"#000000","BG2":"#050505","BG3":"#0a0a0a","BG4":"#0f0f0f",
+        "PANEL":"#000000","BORDER":"#1a1a1a",
+        "TEXT":"#ffffff","TEXT2":"#aaaaaa","TEXT3":"#555555",
+        "ACCENT2":"#00bcd4","ACCENT3":"#69f0ae",
+        "WARN":"#ffab40","DANGER":"#ff5252",
+    },
+    "oled": {
+        "BG":"#000000","BG2":"#050505","BG3":"#0a0a0a","BG4":"#0f0f0f",
+        "PANEL":"#000000","BORDER":"#1a1a1a",
+        "TEXT":"#ffffff","TEXT2":"#aaaaaa","TEXT3":"#555555",
+        "ACCENT2":"#00bcd4","ACCENT3":"#69f0ae",
+        "WARN":"#ffab40","DANGER":"#ff5252",
+    },
+    "light": {
+        "BG":"#f5f5f7","BG2":"#ffffff","BG3":"#efefef","BG4":"#e5e5ed",
+        "PANEL":"#dddde8","BORDER":"#ccccdd",
+        "TEXT":"#1a1a2e","TEXT2":"#555570","TEXT3":"#9999aa",
+        "ACCENT2":"#0099cc","ACCENT3":"#2e7d32",
+        "WARN":"#f57c00","DANGER":"#c62828",
+    },
+}
+
+def _get_theme_colors(override_theme=None, override_accent=None):
+    s = load_settings()  # always fresh from disk
+    theme_name = override_theme or s.get("theme","dark")
+    accent = override_accent or s.get("accent_color","#7c6af7")
+    t = THEMES.get(theme_name, THEMES["dark"])
+    return {**t, "ACCENT": accent}
+
+def _apply_color_globals(theme=None, accent=None):
+    global BG,BG2,BG3,BG4,PANEL,BORDER,TEXT,TEXT2,TEXT3,ACCENT,ACCENT2,ACCENT3,WARN,DANGER
+    c = _get_theme_colors(theme, accent)
+    BG=c["BG"]; BG2=c["BG2"]; BG3=c["BG3"]; BG4=c["BG4"]
+    PANEL=c["PANEL"]; BORDER=c["BORDER"]
+    TEXT=c["TEXT"]; TEXT2=c["TEXT2"]; TEXT3=c["TEXT3"]
+    ACCENT=c["ACCENT"]; ACCENT2=c["ACCENT2"]; ACCENT3=c["ACCENT3"]
+    WARN=c["WARN"]; DANGER=c["DANGER"]
+
+# ── Colors ────────────────────────────────────────────────────
+BG=("#0d0d0f"); BG2=("#13131a"); BG3=("#1a1a24"); BG4=("#20202e")
+PANEL=("#111118"); BORDER=("#2a2a3a")
+ACCENT=("#7c6af7"); ACCENT2=("#4fc3f7"); ACCENT3=("#a5d6a7")
+WARN=("#ffcc80"); DANGER=("#f28b82")
+TEXT=("#e8e8f0"); TEXT2=("#888899"); TEXT3=("#555566"); WHITE=("#ffffff")
+_apply_color_globals()  # Apply saved theme on startup
+FONT_BODY=("Segoe UI",10); FONT_SMALL=("Segoe UI",9)
+FONT_MONO=("Courier New",9); FONT_TINY=("Segoe UI",8)
+EVENT_COLORS=["#7c6af7","#4fc3f7","#a5d6a7","#ffcc80","#f28b82","#ce93d8","#80cbc4","#ffab91"]
+
+def _lighten(h):
+    try:
+        r,g,b=int(h[1:3],16),int(h[3:5],16),int(h[5:7],16)
+        return f"#{min(255,r+30):02x}{min(255,g+30):02x}{min(255,b+30):02x}"
+    except: return h
+
+def fmt_time(dt):
+    if SETTINGS.get("time_format","12h")=="24h":
+        return dt.strftime("%H:%M")
+    else:
+        return dt.strftime("%I:%M %p").lstrip("0")
+
+def fast_card(parent,bg,border,**kwargs):
+    """Lightweight card - single frame, no nesting."""
+    return tk.Frame(parent,bg=bg,padx=10,pady=6,
+                   highlightthickness=1,highlightbackground=border)
+
+def sbtn(parent,text,cmd,bg=ACCENT,fg=WHITE,px=10,py=4):
+    b=tk.Label(parent,text=text,bg=bg,fg=fg,font=FONT_TINY,padx=px,pady=py,cursor="hand2")
+    b.bind("<Button-1>",lambda e:cmd())
+    b.bind("<Enter>",lambda e:b.configure(bg=_lighten(bg)))
+    b.bind("<Leave>",lambda e:b.configure(bg=bg))
+    return b
+
+def scrollable(parent,bg=BG2):
+    f=tk.Frame(parent,bg=bg)
+    c=tk.Canvas(f,bg=bg,highlightthickness=0,bd=0)
+    sb=tk.Scrollbar(f,orient="vertical",command=c.yview,bg=bg,troughcolor=bg,relief="flat")
+    inner=tk.Frame(c,bg=bg)
+    inner.bind("<Configure>",lambda e:c.configure(scrollregion=c.bbox("all")))
+    win=c.create_window((0,0),window=inner,anchor="nw")
+    c.bind("<Configure>",lambda e:c.itemconfig(win,width=e.width))
+    c.configure(yscrollcommand=sb.set)
+    c.pack(side="left",fill="both",expand=True)
+    sb.pack(side="right",fill="y")
+    def _scroll(e): c.yview_scroll(int(-1*(e.delta/120)),"units")
+    c.bind("<MouseWheel>",_scroll)
+    inner.bind("<MouseWheel>",_scroll)
+    return f,inner
+
+def purge_old_habits():
+    import sqlite3
+    from config import DB_PATH
+    cutoff=time.time()-86400
+    conn=sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM habit_completions WHERE timestamp < ?",(cutoff,))
+    conn.commit(); conn.close()
+
+
+class EventDialog(tk.Toplevel):
+    def __init__(self,master,event=None,default_dt=None,on_save=None):
+        super().__init__(master)
+        self.title("Add Event" if event is None else "Edit Event")
+        self.geometry("400x480")
+        self.configure(bg=BG2)
+        self.resizable(False,False)
+        self.on_save=on_save
+        self.event=event
+        self.sel_color=tk.StringVar(value=event["color"] if event and event["color"] else EVENT_COLORS[0])
+        dt=default_dt or (datetime.datetime.fromtimestamp(event["start_time"]) if event else datetime.datetime.now())
+        self._build(dt)
+        self.transient(master)
+        self.attributes('-topmost', True)
+        self.lift()
+        self.focus_force()
+        self.update()
+
+    def _build(self,dt):
+        def lbl(txt):
+            tk.Label(self,text=txt,bg=BG2,fg=TEXT3,font=("Segoe UI",8,"bold")).pack(anchor="w",padx=16,pady=(8,2))
+
+        lbl("TITLE")
+        self.t_entry=tk.Entry(self,bg=BG3,fg=TEXT,insertbackground=ACCENT,relief="flat",
+                              font=FONT_BODY,highlightthickness=1,highlightbackground=BORDER)
+        self.t_entry.pack(fill="x",padx=16,ipady=6)
+        if self.event: self.t_entry.insert(0,self.event["title"])
+
+        lbl("DESCRIPTION")
+        self.d_entry=tk.Text(self,bg=BG3,fg=TEXT,insertbackground=ACCENT,relief="flat",
+                             font=FONT_SMALL,height=3,highlightthickness=1,
+                             highlightbackground=BORDER,wrap="word")
+        self.d_entry.pack(fill="x",padx=16)
+        if self.event and self.event["description"]:
+            self.d_entry.insert("1.0",self.event["description"])
+
+        lbl("DATE  (Year / Month / Day)")
+        row=tk.Frame(self,bg=BG2); row.pack(fill="x",padx=16)
+        self.yr=tk.StringVar(value=str(dt.year))
+        self.mo=tk.StringVar(value=f"{dt.month:02d}")
+        self.dy=tk.StringVar(value=f"{dt.day:02d}")
+        for var,vals,w in [
+            (self.yr,[str(y) for y in range(2024,2036)],7),
+            (self.mo,[f"{m:02d}" for m in range(1,13)],5),
+            (self.dy,[f"{d:02d}" for d in range(1,32)],5)
+        ]:
+            om=tk.OptionMenu(row,var,*vals)
+            om.config(bg=BG3,fg=TEXT,relief="flat",font=FONT_SMALL,
+                      highlightthickness=1,highlightbackground=BORDER,width=w)
+            om["menu"].config(bg=BG3,fg=TEXT,activebackground=ACCENT)
+            om.pack(side="left",padx=(0,4))
+
+        lbl("TIME  (Hour : Min)  + Duration (min)")
+        row2=tk.Frame(self,bg=BG2); row2.pack(fill="x",padx=16)
+        self.hr=tk.StringVar(value=f"{dt.hour:02d}")
+        self.mn=tk.StringVar(value=f"{dt.minute:02d}")
+        self.dur=tk.StringVar(value="60")
+        if self.event and self.event["end_time"]:
+            dur_min=int((self.event["end_time"]-self.event["start_time"])/60)
+            self.dur.set(str(dur_min))
+        for var,vals,w in [
+            (self.hr,[f"{h:02d}" for h in range(24)],5),
+            (self.mn,[f"{m:02d}" for m in range(0,60,5)],5),
+            (self.dur,["15","30","45","60","90","120","180","240"],6)
+        ]:
+            om=tk.OptionMenu(row2,var,*vals)
+            om.config(bg=BG3,fg=TEXT,relief="flat",font=FONT_SMALL,
+                      highlightthickness=1,highlightbackground=BORDER,width=w)
+            om["menu"].config(bg=BG3,fg=TEXT,activebackground=ACCENT)
+            om.pack(side="left",padx=(0,4))
+
+        self.allday=tk.BooleanVar(value=bool(self.event and self.event["all_day"]))
+        tk.Checkbutton(self,text="All day event",variable=self.allday,
+                       bg=BG2,fg=TEXT2,selectcolor=BG3,activebackground=BG2,
+                       font=FONT_SMALL,highlightthickness=0).pack(anchor="w",padx=16,pady=4)
+
+        lbl("COLOR")
+        crow=tk.Frame(self,bg=BG2); crow.pack(anchor="w",padx=16)
+        self.cprev=tk.Label(crow,bg=self.sel_color.get(),text="  ●  ",fg=WHITE,font=("Segoe UI",8,"bold"))
+        self.cprev.pack(side="left",padx=(0,6))
+        for c in EVENT_COLORS:
+            sw=tk.Label(crow,bg=c,width=3,height=1,cursor="hand2")
+            sw.pack(side="left",padx=1)
+            sw.bind("<Button-1>",lambda e,col=c:(self.sel_color.set(col),self.cprev.configure(bg=col)))
+
+        br=tk.Frame(self,bg=BG2); br.pack(fill="x",padx=16,pady=14)
+        sbtn(br,"SAVE",self._save,bg=ACCENT).pack(side="right",padx=(4,0))
+        sbtn(br,"CANCEL",self.destroy,bg=BG3,fg=TEXT2).pack(side="right")
+        if self.event:
+            def do_delete():
+                from memory import delete_calendar_event
+                delete_calendar_event(self.event["id"])
+                self.destroy()
+                if self.on_save: self.on_save()
+            sbtn(br,"DELETE",do_delete,bg=DANGER,fg=WHITE).pack(side="left")
+
+    def _save(self):
+        title=self.t_entry.get().strip()
+        if not title: return
+        desc=self.d_entry.get("1.0","end").strip()
+        try:
+            dt=datetime.datetime(int(self.yr.get()),int(self.mo.get()),int(self.dy.get()),
+                                 int(self.hr.get()),int(self.mn.get()))
+            start=dt.timestamp()
+            end=start+int(self.dur.get())*60
+        except: return
+        color=self.sel_color.get()
+        allday=int(self.allday.get())
+        if self.event:
+            update_calendar_event(self.event["id"],title,start,end,desc,allday,color)
+        else:
+            add_calendar_event(title,start,end,desc,allday,color)
+        self.destroy()
+        if self.on_save: self.on_save()
+
+
+class ChatOverlay(tk.Toplevel):
+    def __init__(self,master):
+        super().__init__(master)
+        self.title("Vision Assistant")
+        self.geometry("1100x740")
+        self.minsize(420,400)
+        self.configure(bg=BG)
+        self.images=[]; self.last_ocr=""; self.last_screenshot=""
+        self.model=tk.StringVar()
+        self.models=[]
+        from config import DEFAULT_MODEL
+        self.model.set(DEFAULT_MODEL)
+        # Fetch models in background - don't block UI
+        def _load_models():
+            try:
+                models = fetch_available_models()
+                def _apply():
+                    self.models = models
+                    if DEFAULT_MODEL in models:
+                        self.model.set(DEFAULT_MODEL)
+                    elif models:
+                        self.model.set(models[0])
+                    # Refresh model dropdown if it exists
+                    try:
+                        menu = self.model_menu["menu"]
+                        menu.delete(0,"end")
+                        for m in models:
+                            menu.add_command(label=m,command=lambda v=m:self.model.set(v))
+                    except: pass
+                self.after(0, _apply)
+            except: pass
+        import threading
+        threading.Thread(target=_load_models,daemon=True).start()
+        self.panel_open=False; self.chat_open=True
+        self.active_page=None
+        self.cal_view="month"
+        self.cal_date=datetime.date.today()
+        self.cal_filters={"event":True,"journal":True,"habit":True,"goal":True}
+        self.cal_sort="newest"
+        self._panel_width=420
+        self._div_x=None
+        self._did_drag=False
+        self._drag_event=None
+        self._drag_origin=None
+        self.task_mode=tk.BooleanVar(value=False)
+        self._drag_event=None; self._drag_origin=None; self._did_drag=False
+        purge_old_habits()
+        self._build()
+        self.bind_all("<MouseWheel>",self._on_mousewheel)
+        self.bind_all("<Button-4>",self._on_mousewheel)
+        self.bind_all("<Button-5>",self._on_mousewheel)
+        self.bind("<Escape>",lambda e:self._close_panels())
+        self.after(2000,self._update_badges)
+        self.after(1500,self._show_morning_briefing)
+        self.after(5000,self._check_event_toasts)
+        self.after(10000,self._check_smart_suggestions)
+        # Start event notification daemon
+        try:
+            from briefing import start_notification_daemon
+            start_notification_daemon()
+        except Exception as e:
+            print(f"Notification daemon error: {e}")
+        # chat ready message sent after bubble builds
+
+    def _build(self):
+        self.columnconfigure(0,weight=1)
+        self.rowconfigure(0,weight=1)
+        self.rail=tk.Frame(self,bg=PANEL,width=0)
+        self.rail.grid_remove()
+        # Main area fills everything
+        self.main_area=tk.Frame(self,bg=BG)
+        self.main_area.place(x=0,y=0,relwidth=1,relheight=1)
+        self.main_area.columnconfigure(0,weight=1)
+        self.main_area.rowconfigure(0,weight=0)
+        self.main_area.rowconfigure(1,weight=0)
+        self.main_area.rowconfigure(2,weight=1)
+        # Side panel floats OVER main area
+        self.side_panel=tk.Frame(self,bg=BG2,width=220)
+        self.side_panel.place_forget()
+        self.side_panel.grid_propagate(False)
+        self._build_rail()
+        self._build_side_panel()
+        self._build_topbar()
+        self._build_main_content()
+        self.after(100, self._build_chat_bubble)
+        self.bind("<Configure>", self._on_configure)
+        # Prevent _build_chat_bubble from calling update_idletasks repeatedly
+
+    def _build_rail(self):
+        pass  # Rail removed - nav items now in side panel
+        self._rail_badges = {}
+    def _build_side_panel(self):
+        self.side_panel.configure(bg=BG2)
+        tk.Frame(self.side_panel,bg=ACCENT,height=2).pack(fill="x",side="top")
+        self.side_panel.configure(bg=BG2)
+        hdr=tk.Frame(self.side_panel,bg=BG2,pady=10,padx=14); hdr.pack(fill="x")
+        self.panel_title=tk.Label(hdr,text="MENU",bg=BG2,fg=TEXT2,font=("Segoe UI",9,"bold"),anchor="w")
+        self.panel_title.pack(side="left")
+        cl=tk.Label(hdr,text="✕",bg=BG2,fg=TEXT3,font=("Segoe UI",11),cursor="hand2")
+        cl.pack(side="right")
+        cl.bind("<Button-1>",lambda e:(self.side_panel.place_forget(), setattr(self,"panel_open",False)))
+        tk.Frame(self.side_panel,bg=BORDER,height=1).pack(fill="x")
+        # Combined nav in side panel
+        nav_items=[
+            ("✓","Tasks","tasks",ACCENT),
+            ("◈","Habits","habits",ACCENT2),
+            ("✦","Journal","journal",ACCENT3),
+            ("◷","Calendar","calendar",WARN),
+            None,
+            ("＋","Quick Add",None,ACCENT3),
+            ("⏱","Focus Timer",None,WARN),
+            ("⚙","Settings","settings",TEXT2),
+        ]
+        self._nav_badges={}
+        for item in nav_items:
+            if item is None:
+                tk.Frame(self.side_panel,bg=BORDER,height=1).pack(fill="x",padx=8,pady=4)
+                continue
+            icon,label,page,color=item
+            nf=tk.Frame(self.side_panel,bg=BG2,cursor="hand2")
+            nf.pack(fill="x")
+            row=tk.Frame(nf,bg=BG2); row.pack(fill="x",padx=10,pady=4)
+            tk.Label(row,text=icon,bg=BG2,fg=color,font=("Segoe UI",13),width=2).pack(side="left")
+            tk.Label(row,text=label,bg=BG2,fg=TEXT,font=("Segoe UI",10)).pack(side="left",padx=8)
+            # Badge for data pages
+            if page in ("tasks","habits","journal"):
+                badge=tk.Label(row,text="",bg=DANGER,fg=WHITE,font=("Segoe UI",7,"bold"),width=2)
+                badge.pack(side="right",padx=4)
+                self._nav_badges[page]=badge
+            # Click actions
+            if page:
+                cmd=lambda e,p=page: self.open_page(p)
+            elif label=="Quick Add":
+                cmd=lambda e: self._quick_add()
+            elif label=="Focus Timer":
+                cmd=lambda e: self._show_pomodoro()
+            elif label=="Settings":
+                cmd=lambda e: self.open_page("settings")
+            else:
+                cmd=lambda e: None
+            for w in (nf,row):
+                w.bind("<Button-1>",cmd)
+                w.bind("<Enter>",lambda e,f=nf:f.configure(bg=BG3))
+                w.bind("<Leave>",lambda e,f=nf:f.configure(bg=BG2))
+            if page and page not in ("settings","calendar"):
+                for w in (nf,row):
+                    w.bind("<Button-3>",lambda e,p=page:self.open_page(p,panel=2))
+        tk.Frame(self.side_panel,bg=BORDER,height=1).pack(fill="x",padx=8,pady=4)
+        tk.Label(self.side_panel,text="right-click → open second panel",
+                 bg=BG2,fg=TEXT3,font=("Segoe UI",7),padx=10).pack(anchor="w",pady=(0,4))
+        self.panel_content=self.main_area
+
+
+    def _build_topbar(self):
+        bar=tk.Frame(self.main_area,bg=BG,pady=8,padx=14)
+        bar.place(x=0,y=0,relwidth=1,height=44)
+        # Hamburger menu button
+        menu_btn=tk.Label(bar,text="≡",bg=BG,fg=ACCENT,font=("Segoe UI",16),
+                          cursor="hand2",padx=8)
+        menu_btn.pack(side="left")
+        def _do_toggle(e=None):
+            print("MENU CLICKED", flush=True)
+            self.toggle_panel()
+            return "break"
+        menu_btn.bind("<Button-1>", _do_toggle)
+        menu_btn.bind("<ButtonRelease-1>", lambda e: None)
+        tk.Label(bar,text="VISION ASSISTANT",bg=BG,fg=TEXT2,
+                 font=("Segoe UI",10,"bold"),padx=4).pack(side="left")
+        right=tk.Frame(bar,bg=BG); right.pack(side="right")
+        # task_mode defined in bubble
+        tk.Checkbutton(right,text="TASK MODE",variable=self.task_mode,bg=BG,fg=TEXT3,
+                       selectcolor=BG3,activebackground=BG,font=("Segoe UI",8,"bold"),
+                       highlightthickness=0).pack(side="right",padx=8)
+        tk.Label(right,text="MODEL",bg=BG,fg=TEXT3,font=("Segoe UI",8,"bold")).pack(side="right",padx=(8,2))
+        _models_for_menu = self.models if self.models else [self.model.get()]
+        self.model_menu=tk.OptionMenu(right,self.model,*_models_for_menu)
+        self.model_menu.config(bg=BG3,fg=TEXT,activebackground=BG3,relief="flat",
+                               font=FONT_SMALL,highlightthickness=1,highlightbackground=BORDER,bd=0)
+        self.model_menu["menu"].config(bg=BG3,fg=TEXT,activebackground=ACCENT)
+        self.model_menu.pack(side="right")
+        tk.Frame(self.main_area,bg=BORDER,height=1).place(x=0,y=43,relwidth=1,height=1)
+
+    def _invalidate_page(self,*pages):
+        if not hasattr(self,"_page_dirty"): self._page_dirty={}
+        for p in (pages or ["tasks","habits","journal","settings","calendar"]):
+            self._page_dirty[p]=True
+
+    def _show_welcome(self):
+        """Show welcome screen in main area."""
+        if hasattr(self,"main_content") and self.main_content.winfo_exists():
+            self.main_content.destroy()
+        self.main_content=tk.Frame(self.main_area,bg=BG)
+        self.main_content.place(x=0,y=44,relwidth=1,relheight=1,height=-44)
+        wf=tk.Frame(self.main_content,bg=BG)
+        wf.place(relx=0.5,rely=0.4,anchor="center")
+        tk.Label(wf,text="VISION",bg=BG,fg=ACCENT,
+                 font=("Segoe UI",32,"bold")).pack()
+        tk.Label(wf,text="ASSISTANT",bg=BG,fg=TEXT3,
+                 font=("Segoe UI",14)).pack()
+        tk.Label(wf,text="≡  Open menu to navigate",bg=BG,fg=TEXT3,
+                 font=("Segoe UI",10)).pack(pady=(16,0))
+
+    def _build_main_content(self):
+        self.main_content=tk.Frame(self.main_area,bg=BG)
+        self.main_content.place(x=0,y=44,relwidth=1,relheight=1,height=-44)
+        # Welcome screen
+        wf=tk.Frame(self.main_content,bg=BG)
+        wf.place(relx=0.5,rely=0.4,anchor="center")
+        tk.Label(wf,text="VISION",bg=BG,fg=ACCENT,
+                 font=("Segoe UI",32,"bold")).pack()
+        tk.Label(wf,text="ASSISTANT",bg=BG,fg=TEXT3,
+                 font=("Segoe UI",14)).pack()
+        tk.Label(wf,text="≡  Open menu to navigate",bg=BG,fg=TEXT3,
+                 font=("Segoe UI",10)).pack(pady=(16,0))
+
+
+    def _build_chat(self):
+        pass  # replaced by floating bubble
+
+    def _build_input(self):
+        pass  # replaced by floating bubble
+
+    def _build_chat_bubble(self):
+        """Floating chat bubble anchored to bottom-right of window."""
+        self.bubble_open=False
+        self.bubble_w=380
+        self.bubble_h=480
+
+        # Bubble toggle button
+        self.bubble_btn=tk.Label(self,text="💬",bg=ACCENT,fg=WHITE,
+                                  font=("Segoe UI",18),width=2,pady=6,
+                                  cursor="hand2",relief="flat")
+        self.bubble_btn.bind("<Button-1>",lambda e:self._toggle_bubble())
+        self._place_bubble_btn()
+        self.bind("<Configure>",lambda e:self._place_bubble_btn())
+
+        # Chat panel (hidden initially)
+        self.bubble_panel=tk.Frame(self,bg=BG2,highlightthickness=1,
+                                    highlightbackground=ACCENT)
+        self.bubble_panel.columnconfigure(0,weight=1)
+        self.bubble_panel.rowconfigure(1,weight=1)
+
+        # Bubble header
+        bh=tk.Frame(self.bubble_panel,bg=ACCENT,pady=6,padx=12)
+        bh.grid(row=0,column=0,sticky="ew")
+        tk.Label(bh,text="💬  CHAT",bg=ACCENT,fg=WHITE,font=("Segoe UI",10,"bold")).pack(side="left")
+        # Model selector in header
+        self.bubble_model_var=tk.StringVar(value=self.model.get())
+        _bm=self.models if self.models else [self.model.get()]
+        om=tk.OptionMenu(bh,self.bubble_model_var,*_bm)
+        om.config(bg=_lighten(ACCENT),fg=WHITE,relief="flat",font=("Segoe UI",8),
+                  highlightthickness=0,bd=0,activebackground=ACCENT)
+        om["menu"].config(bg=BG3,fg=TEXT,activebackground=ACCENT)
+        om.pack(side="left",padx=8)
+        self.bubble_model_var.trace("w",lambda *a:self.model.set(self.bubble_model_var.get()))
+        cl=tk.Label(bh,text="✕",bg=ACCENT,fg=WHITE,font=("Segoe UI",12),cursor="hand2")
+        cl.pack(side="right")
+        cl.bind("<Button-1>",lambda e:self._toggle_bubble())
+
+        # Chat text
+        chat_frame=tk.Frame(self.bubble_panel,bg=BG2)
+        chat_frame.grid(row=1,column=0,sticky="nsew")
+        chat_frame.columnconfigure(0,weight=1); chat_frame.rowconfigure(0,weight=1)
+        self.chat_text=tk.Text(chat_frame,wrap="word",state="disabled",bg=BG2,fg=TEXT,
+                                insertbackground=TEXT,font=FONT_BODY,relief="flat",
+                                padx=12,pady=12,spacing1=2,spacing3=2,cursor="arrow",
+                                selectbackground=ACCENT)
+        self.chat_text.grid(row=0,column=0,sticky="nsew")
+        sb=tk.Scrollbar(chat_frame,command=self.chat_text.yview,bg=BG2,
+                         troughcolor=BG3,relief="flat",width=6)
+        sb.grid(row=0,column=1,sticky="ns")
+        self.chat_text.config(yscrollcommand=sb.set)
+        self.chat_text.tag_config("role_system",foreground=TEXT3,font=("Segoe UI",9))
+        self.chat_text.tag_config("role_you",foreground=ACCENT2,font=("Segoe UI",10,"bold"))
+        self.chat_text.tag_config("role_ai",foreground=ACCENT3)
+        self.chat_text.tag_config("role_ocr",foreground=WARN,font=FONT_MONO)
+        self.chat_text.tag_config("role_task",foreground=ACCENT)
+        self.chat_text.tag_config("role_output",foreground=TEXT2,font=FONT_MONO)
+        self.chat_text.tag_config("divider",foreground=TEXT3,font=("Segoe UI",7))
+
+        # Input row
+        inf=tk.Frame(self.bubble_panel,bg=BG3,pady=8,padx=8)
+        inf.grid(row=2,column=0,sticky="ew")
+        inf.columnconfigure(0,weight=1)
+        self.input_box=tk.Entry(inf,bg=BG4,fg=TEXT,insertbackground=ACCENT,
+                                 relief="flat",font=FONT_BODY,highlightthickness=1,
+                                 highlightbackground=BORDER,highlightcolor=ACCENT)
+        self.input_box.grid(row=0,column=0,sticky="ew",ipady=7,padx=(0,6))
+        self.input_box.bind("<Return>",lambda e:self.send_message())
+        send=tk.Label(inf,text="↑",bg=ACCENT,fg=WHITE,font=("Segoe UI",12,"bold"),
+                       padx=10,pady=6,cursor="hand2")
+        send.grid(row=0,column=1)
+        send.bind("<Button-1>",lambda e:self.send_message())
+        send.bind("<Enter>",lambda e:send.configure(bg=_lighten(ACCENT)))
+        send.bind("<Leave>",lambda e:send.configure(bg=ACCENT))
+
+        # Task mode toggle
+        tm=tk.Frame(self.bubble_panel,bg=BG3,padx=8,pady=4)
+        tm.grid(row=3,column=0,sticky="ew")
+        tk.Checkbutton(tm,text="TASK MODE",variable=self.task_mode,bg=BG3,fg=TEXT3,
+                        selectcolor=BG4,activebackground=BG3,font=("Segoe UI",8,"bold"),
+                        highlightthickness=0).pack(side="left")
+        for sym,cmd in [("🎤",self.record_voice),("📎",self.attach_file)]:
+            b=tk.Label(tm,text=sym,bg=BG3,fg=TEXT2,font=("Segoe UI",11),cursor="hand2")
+            b.pack(side="right",padx=4)
+            b.bind("<Button-1>",lambda e,c=cmd:c())
+            if sym=="🎤": self._mic_btn=b
+
+        self.after(200, lambda: self.append_chat("system","Vision Assistant ready. 💬"))
+
+    def _place_bubble_btn(self):
+        try:
+            w=self.winfo_width(); h=self.winfo_height()
+            side=SETTINGS.get("chat_side","right")
+            if side=="left":
+                bx=8; px=8
+            else:
+                bx=w-64; px=w-self.bubble_w-8
+            self.bubble_btn.place(x=bx,y=h-64,width=52,height=52)
+            self.bubble_btn.lift()
+            if self.bubble_open:
+                bw=self.bubble_w; bh=self.bubble_h
+                self.bubble_panel.place(x=px,y=h-bh-72,width=bw,height=bh)
+                self.bubble_panel.lift()
+        except: pass
+
+    def _toggle_bubble(self):
+        if self.bubble_open:
+            self.bubble_panel.place_forget()
+            self.bubble_open=False
+            self.bubble_btn.configure(text="💬")
+        else:
+            self.bubble_open=True
+            self.bubble_btn.configure(text="✕")
+            self._place_bubble_btn()
+
+    def _on_mousewheel(self,e):
+        # Find the canvas under cursor and scroll it
+        w=e.widget
+        for _ in range(10):
+            if isinstance(w,tk.Canvas):
+                delta=0
+                if e.num==4: delta=-3
+                elif e.num==5: delta=3
+                else: delta=int(-1*(e.delta/120))
+                w.yview_scroll(delta,"units")
+                return
+            try: w=w.master
+            except: break
+
+    def _open_second_panel(self, page):
+        """Open a second floating panel for side-by-side views."""
+        # Create or reuse second panel
+        if not hasattr(self,"_panel2") or not self._panel2.winfo_exists():
+            self._panel2=tk.Frame(self,bg=BG2,highlightthickness=1,
+                                  highlightbackground=BORDER)
+        self.update_idletasks()
+        w=self.winfo_width(); h=self.winfo_height()
+        side=SETTINGS.get("menu_side","left")
+        # Place second panel on opposite side to main panel
+        p2w=320
+        if side=="left":
+            x=w-p2w  # right side
+        else:
+            x=0  # left side
+        self._panel2.place(x=x,y=0,width=p2w,height=h)
+        self._panel2.lift()
+        # Header
+        for w2 in self._panel2.winfo_children(): w2.destroy()
+        hdr=tk.Frame(self._panel2,bg=BG3,pady=8,padx=12); hdr.pack(fill="x")
+        tk.Label(hdr,text=page.upper(),bg=BG3,fg=ACCENT,
+                 font=("Segoe UI",9,"bold")).pack(side="left")
+        cl=tk.Label(hdr,text="✕",bg=BG3,fg=TEXT3,cursor="hand2",font=("Segoe UI",11))
+        cl.pack(side="right")
+        cl.bind("<Button-1>",lambda e:self._panel2.place_forget())
+        # Content
+        content=tk.Frame(self._panel2,bg=BG2)
+        content.pack(fill="both",expand=True)
+        # Temporarily swap panel_content to render into panel2
+        orig=self.panel_content
+        self.panel_content=content
+        {"tasks":self._page_tasks,"habits":self._page_habits,
+         "journal":self._page_journal,"settings":self._page_settings}.get(page,lambda:None)()
+        self.panel_content=orig
+
+    def _on_configure(self, e=None):
+        if hasattr(self,"_conf_job"):
+            try: self.after_cancel(self._conf_job)
+            except: pass
+        self._conf_job = self.after(120, self._reposition_panel)
+
+    def _reposition_panel(self):
+        # Debounce - cancel pending call, reschedule
+        if hasattr(self,"_repos_job"):
+            try: self.after_cancel(self._repos_job)
+            except: pass
+        self._repos_job = self.after(150, self._do_reposition)
+
+    def _do_reposition(self):
+        if self.panel_open:
+            w=self.winfo_width(); h=self.winfo_height()
+            if w<100: return
+            side=load_settings().get("menu_side","left")
+            x=w-self._panel_width if side=="right" else 0
+            try: self._scrim.place(x=0,y=0,relwidth=1,relheight=1); self._scrim.lift()
+            except: pass
+            self.side_panel.place(x=x,y=0,width=self._panel_width,height=h)
+            self.side_panel.lift()
+        try: self._place_bubble_btn()
+        except: pass
+
+    def _close_panels(self):
+        if self.panel_open:
+            self.side_panel.place_forget()
+            self.panel_open=False
+
+    def toggle_chat(self):
+        self._toggle_bubble()
+
+    def toggle_panel(self):
+        if self.panel_open:
+            self.side_panel.place_forget()
+            self.panel_open=False
+            return
+        w=self.winfo_width(); h=self.winfo_height()
+        if w<100: w=1100
+        if h<100: h=740
+        side=load_settings().get("menu_side","left")
+        x=w-self._panel_width if side=="right" else 0
+        self.side_panel.place(x=x,y=0,width=self._panel_width,height=h)
+        self.side_panel.lift()
+        self.panel_open=True
+
+
+    def _restack_divider(self):
+        # Place divider as a thin overlay on right edge of side panel
+        self.side_panel.update_idletasks()
+        x=self.side_panel.winfo_x()+self.side_panel.winfo_width()-3
+        self.divider.place(x=x,y=0,width=8,relheight=1)
+        self.divider.lift()
+
+    def _div_start(self,e):
+        self._div_x=e.x_root
+
+    def _div_drag(self,e):
+        if self._div_x is None: return
+        dx=e.x_root-self._div_x
+        self._div_x=e.x_root
+        new_w=max(220,min(700,self._panel_width+dx))
+        self._panel_width=new_w
+        self.side_panel.configure(width=new_w)
+        self.side_panel.grid_propagate(False)
+        self.update_idletasks()
+        pass  # divider removed
+
+    def open_page(self,page,panel=1):
+        self.active_page=page
+        if page=="calendar":
+            self._show_full_calendar()
+        else:
+            self._render_page_main(page)
+        if self.panel_open:
+            if load_settings().get("menu_stay_open", True):
+                self.side_panel.lift()
+            else:
+                self.side_panel.place_forget()
+                self.panel_open=False
+
+    def _render_page_main(self,page):
+        """Render page with cache - build once, show/hide after."""
+        if not hasattr(self,"_page_frames"): self._page_frames={}
+        if not hasattr(self,"_page_dirty"): self._page_dirty={}
+        # Hide current page
+        if hasattr(self,"main_content") and self.main_content.winfo_exists():
+            self.main_content.place_forget()
+        # Use cached if clean
+        if page in self._page_frames and not self._page_dirty.get(page,False) and self._page_frames[page].winfo_exists():
+            self._page_frames[page].place(x=0,y=44,relwidth=1,relheight=1,height=-44)
+            self._page_frames[page].lift()
+            self.main_content=self._page_frames[page]
+            return
+        # Build new frame
+        if page in self._page_frames:
+            try: self._page_frames[page].destroy()
+            except: pass
+        frame=tk.Frame(self.main_area,bg=BG)
+        frame.place(x=0,y=44,relwidth=1,relheight=1,height=-44)
+        frame.lift()
+        self.main_content=frame
+        orig=self.panel_content
+        self.panel_content=frame
+        pages={
+            "tasks":    self._page_tasks,
+            "habits":   self._page_habits,
+            "journal":  self._page_journal,
+            "settings": self._page_settings,
+        }
+        if page in pages:
+            try:
+                pages[page]()
+            except Exception as e:
+                import traceback; traceback.print_exc()
+                tk.Label(frame,text=f"Error: {e}",bg=BG,fg=DANGER,
+                        font=FONT_SMALL,wraplength=400).pack(padx=20,pady=20)
+        self.panel_content=orig
+        self._page_frames[page]=frame
+        self._page_dirty[page]=False
+
+    def _clear_panel(self):
+        for w in self.panel_content.winfo_children():
+            w.destroy()
+
+
+    def _show_menu(self):
+        self._clear_panel(); self.panel_title.config(text="MENU")
+        tk.Frame(self.panel_content,bg=BG2,height=8).pack()
+        for label,page,color in [("✓  Tasks","tasks",ACCENT),("◈  Habits","habits",ACCENT2),
+                                   ("✦  Journal","journal",ACCENT3),("◷  Calendar","calendar",WARN),
+                                   ("⚙  Settings","settings",TEXT2)]:
+            row=tk.Frame(self.panel_content,bg=BG2,cursor="hand2"); row.pack(fill="x")
+            bar=tk.Frame(row,bg=BG2,width=3); bar.place(x=0,y=0,relheight=1)
+            lbl=tk.Label(row,text=label,bg=BG2,fg=TEXT,font=("Segoe UI",11),anchor="w",padx=20,pady=11)
+            lbl.pack(fill="x")
+            for w in (row,lbl):
+                w.bind("<Button-1>",lambda e,p=page:self.open_page(p))
+                w.bind("<Enter>",lambda e,l=lbl,b=bar,c=color:(l.configure(fg=c),b.configure(bg=c)))
+                w.bind("<Leave>",lambda e,l=lbl,b=bar:(l.configure(fg=TEXT),b.configure(bg=BG2)))
+
+    # ── SETTINGS ─────────────────────────────────────────────
+
+    def _page_settings(self):
+        sf,inner=scrollable(self.panel_content); sf.pack(fill="both",expand=True)
+        tk.Frame(inner,bg=BG2,height=10).pack()
+
+        def section(title,color=TEXT2):
+            tk.Label(inner,text=title,bg=BG2,fg=color,font=("Segoe UI",9,"bold"),padx=14).pack(anchor="w",pady=(12,4))
+
+        # TIME FORMAT
+        section("TIME FORMAT",ACCENT)
+        tf_frame=tk.Frame(inner,bg=BG3,padx=14,pady=12); tf_frame.pack(fill="x",padx=10,pady=(0,6))
+        tf_var=tk.StringVar(value=SETTINGS.get("time_format","12h"))
+        for val,lbl in [("12h","12-hour  (1:00 PM)"),("24h","24-hour / Military  (13:00)")]:
+            tk.Radiobutton(tf_frame,text=lbl,variable=tf_var,value=val,
+                           bg=BG3,fg=TEXT,activebackground=BG3,selectcolor=BG2,
+                           font=FONT_SMALL,highlightthickness=0,cursor="hand2").pack(anchor="w",pady=2)
+
+        # THEME
+        section("THEME",ACCENT)
+        th_frame=tk.Frame(inner,bg=BG3,padx=14,pady=12); th_frame.pack(fill="x",padx=10,pady=(0,6))
+        th_var=tk.StringVar(value=SETTINGS.get("theme","dark"))
+        theme_row=tk.Frame(th_frame,bg=BG3); theme_row.pack(fill="x",pady=(0,8))
+        for val,lbl,preview_bg,preview_fg in [
+            ("dark","Dark","#13131a","#7c6af7"),
+            ("terminal","Terminal","#111111","#ffb300"),
+            ("light","Light","#ffffff","#5b4de8"),
+            ("oled","OLED","#000000","#ffffff"),
+        ]:
+            tf=tk.Frame(theme_row,bg=BG3,cursor="hand2"); tf.pack(side="left",padx=6)
+            # Preview box
+            pv=tk.Frame(tf,bg=preview_bg,width=64,height=40,
+                        highlightthickness=2,
+                        highlightbackground=ACCENT if th_var.get()==val else BORDER)
+            pv.pack(); pv.pack_propagate(False)
+            tk.Label(pv,text="Aa",bg=preview_bg,fg=preview_fg,
+                     font=("Segoe UI",11,"bold")).pack(expand=True)
+            tk.Label(tf,text=lbl,bg=BG3,fg=TEXT if th_var.get()==val else TEXT3,
+                     font=("Segoe UI",8,"bold")).pack(pady=(3,0))
+            def select_theme(v=val,frame=tf,preview=pv):
+                th_var.set(v)
+                # Update all preview borders visually
+                for child in theme_row.winfo_children():
+                    for sub in child.winfo_children():
+                        if isinstance(sub,tk.Frame):
+                            sub.configure(highlightbackground=BORDER)
+                preview.configure(highlightbackground=ACCENT)
+            for w in (tf,pv): w.bind("<Button-1>",lambda e,sv=select_theme:sv())
+
+        # ACCENT COLOR wheel
+        tk.Frame(th_frame,bg=BORDER,height=1).pack(fill="x",pady=(4,8))
+        tk.Label(th_frame,text="ACCENT COLOR",bg=BG3,fg=TEXT3,
+                 font=("Segoe UI",8,"bold")).pack(anchor="w",pady=(0,6))
+        color_row=tk.Frame(th_frame,bg=BG3); color_row.pack(fill="x")
+        accent_colors=[
+            "#7c6af7","#5b8dee","#4fc3f7","#26c6da",
+            "#a5d6a7","#66bb6a","#ffcc02","#ffa726",
+            "#f28b82","#e040fb","#ff6090","#80cbc4",
+            "#ffffff","#888899","#ff5722","#00bcd4",
+        ]
+        current_accent=SETTINGS.get("accent_color","#7c6af7")
+        acc_var=tk.StringVar(value=current_accent)
+        # keep ref so save_s closure can access it
+        # Preview swatch
+        swatch_frame=tk.Frame(color_row,bg=BG3); swatch_frame.pack(side="right",padx=(8,0))
+        swatch=tk.Frame(swatch_frame,bg=current_accent,width=36,height=36,
+                        highlightthickness=2,highlightbackground=TEXT2)
+        swatch.pack()
+        tk.Label(swatch_frame,text="accent",bg=BG3,fg=TEXT3,font=("Segoe UI",7)).pack()
+        # Color grid
+        cgrid=tk.Frame(color_row,bg=BG3); cgrid.pack(side="left")
+        for i,c in enumerate(accent_colors):
+            selected=(c==current_accent)
+            dot=tk.Frame(cgrid,bg=c,width=22,height=22,cursor="hand2",
+                         highlightthickness=2,
+                         highlightbackground=WHITE if selected else c)
+            dot.grid(row=i//8,column=i%8,padx=2,pady=2)
+            def pick(col=c):
+                acc_var.set(col)
+                swatch.configure(bg=col)
+                # Update all dot borders
+                for w in cgrid.winfo_children():
+                    w.configure(highlightbackground=WHITE if w["bg"]==col else w["bg"])
+            dot.bind("<Button-1>",lambda e,p=pick:p())
+        # Custom hex entry
+        hex_row=tk.Frame(th_frame,bg=BG3); hex_row.pack(fill="x",pady=(6,0))
+        tk.Label(hex_row,text="Custom hex:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        hex_entry=tk.Entry(hex_row,bg=BG2,fg=TEXT,insertbackground=ACCENT,
+                           relief="flat",font=FONT_TINY,width=10,
+                           highlightthickness=1,highlightbackground=BORDER)
+        hex_entry.pack(side="left",padx=6,ipady=3)
+        hex_entry.insert(0,current_accent)
+        def apply_hex():
+            val=hex_entry.get().strip()
+            if val.startswith("#") and len(val)==7:
+                acc_var.set(val); swatch.configure(bg=val)
+        sbtn(hex_row,"Apply",apply_hex,bg=BG4,fg=TEXT2,px=8,py=2).pack(side="left")
+
+        # VOICE / TTS
+        section("VOICE",ACCENT2)
+        v_frame=tk.Frame(inner,bg=BG3,padx=14,pady=12); v_frame.pack(fill="x",padx=10,pady=(0,6))
+        tts_var=tk.BooleanVar(value=SETTINGS.get("tts_enabled",False))
+        tk.Checkbutton(v_frame,text="Speak AI responses (Piper TTS)",variable=tts_var,
+                       bg=BG3,fg=TEXT,selectcolor=BG2,activebackground=BG3,
+                       font=FONT_SMALL,highlightthickness=0).pack(anchor="w")
+        try:
+            from voice import vosk_available, piper_available, tts_available
+            vstatus="✓ Vosk ready" if vosk_available() else "✗ Vosk model missing"
+            pstatus="✓ Piper ready" if piper_available() else "✗ Piper model missing — using espeak"
+            tk.Label(v_frame,text=vstatus,bg=BG3,fg=ACCENT3 if vosk_available() else DANGER,font=FONT_TINY).pack(anchor="w",pady=(4,0))
+            tk.Label(v_frame,text=pstatus,bg=BG3,fg=ACCENT3 if piper_available() else WARN,font=FONT_TINY).pack(anchor="w")
+        except: pass
+
+        # LAYOUT
+        section("LAYOUT",ACCENT)
+        lay_frame=tk.Frame(inner,bg=BG3,padx=14,pady=12); lay_frame.pack(fill="x",padx=10,pady=(0,6))
+        # Menu side
+        tk.Label(lay_frame,text="Menu panel side:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(anchor="w")
+        menu_side_var=tk.StringVar(value=SETTINGS.get("menu_side","left"))
+        side_row=tk.Frame(lay_frame,bg=BG3); side_row.pack(fill="x",pady=(2,8))
+        for val,lbl in [("left","← Left"),("right","Right →")]:
+            tk.Radiobutton(side_row,text=lbl,variable=menu_side_var,value=val,
+                          bg=BG3,fg=TEXT,selectcolor=BG2,activebackground=BG3,
+                          font=FONT_SMALL,highlightthickness=0,cursor="hand2").pack(side="left",padx=8)
+        # Chat bubble side
+        tk.Label(lay_frame,text="Chat bubble side:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(anchor="w")
+        chat_side_var=tk.StringVar(value=SETTINGS.get("chat_side","right"))
+        cside_row=tk.Frame(lay_frame,bg=BG3); cside_row.pack(fill="x",pady=(2,0))
+        for val,lbl in [("left","← Left"),("right","Right →")]:
+            tk.Radiobutton(cside_row,text=lbl,variable=chat_side_var,value=val,
+                          bg=BG3,fg=TEXT,selectcolor=BG2,activebackground=BG3,
+                          font=FONT_SMALL,highlightthickness=0,cursor="hand2").pack(side="left",padx=8)
+
+        # NETWORK
+        section("NETWORK",WARN)
+        n_frame=tk.Frame(inner,bg=BG3,padx=14,pady=12); n_frame.pack(fill="x",padx=10,pady=(0,6))
+        net_var=tk.BooleanVar(value=SETTINGS.get("online_mode",True))
+        tk.Checkbutton(n_frame,text="Online mode (web search, updates)",variable=net_var,
+                       bg=BG3,fg=TEXT,selectcolor=BG2,activebackground=BG3,
+                       font=FONT_SMALL,highlightthickness=0).pack(anchor="w")
+        tk.Label(n_frame,text="When off: Ollama only, no external calls",
+                 bg=BG3,fg=TEXT3,font=FONT_TINY).pack(anchor="w",pady=(2,0))
+
+        # AI MODEL
+        section("AI MODEL",ACCENT2)
+        m_frame=tk.Frame(inner,bg=BG3,padx=14,pady=12); m_frame.pack(fill="x",padx=10,pady=(0,6))
+        tk.Label(m_frame,text="Default model on startup:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(anchor="w")
+        m_var=tk.StringVar(value=SETTINGS.get("default_model","gemma3:latest"))
+        om=tk.OptionMenu(m_frame,m_var,*self.models)
+        om.config(bg=BG2,fg=TEXT,relief="flat",font=FONT_SMALL,
+                  highlightthickness=1,highlightbackground=BORDER)
+        om["menu"].config(bg=BG2,fg=TEXT,activebackground=ACCENT)
+        om.pack(fill="x",pady=(4,0))
+
+        # SYNC
+        section("SYNC / ANDROID",ACCENT3)
+        s_frame=tk.Frame(inner,bg=BG3,padx=14,pady=12); s_frame.pack(fill="x",padx=10,pady=(0,6))
+        try:
+            from sync import get_sync_status
+            status=get_sync_status()
+            if status["synced"]:
+                tk.Label(s_frame,text=f"Last sync: {status['last_sync']}  ({status['size_kb']} KB)",
+                         bg=BG3,fg=ACCENT3,font=FONT_TINY).pack(anchor="w",pady=(0,6))
+            else:
+                tk.Label(s_frame,text="Never synced",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(anchor="w",pady=(0,6))
+        except: pass
+        def do_sync():
+            try:
+                from sync import export_state
+                path,checksum=export_state()
+                self.append_chat("system",f"✓ Synced to {path}")
+                self.open_page("settings")
+            except Exception as e:
+                self.append_chat("system",f"Sync error: {e}")
+        sbtn(s_frame,"Export State (for Android)",do_sync,bg=ACCENT3,fg=BG,px=10,py=4).pack(anchor="w")
+        tk.Label(s_frame,text="Saves to ~/vision_assistant/sync/state.json",
+                 bg=BG3,fg=TEXT3,font=FONT_TINY).pack(anchor="w",pady=(4,0))
+
+        # ABOUT
+        # ECHO BRIDGE
+        section("ECHO BRIDGE",ACCENT)
+        eb=tk.Frame(inner,bg=BG3,padx=14,pady=12); eb.pack(fill="x",padx=10,pady=(0,6))
+        echo_status=self._echo_bridge_status()
+        if echo_status:
+            tk.Label(eb,text=f"✓ Echo connected: {echo_status.get('echo_path','')}",
+                     bg=BG3,fg=ACCENT3,font=FONT_TINY).pack(anchor="w")
+        else:
+            tk.Label(eb,text="Not configured — Echo bridge shares memory.db and voice models",
+                     bg=BG3,fg=TEXT3,font=FONT_TINY,wraplength=280).pack(anchor="w")
+        echo_path_var=tk.StringVar(value=echo_status.get("echo_path","~/echo") if echo_status else "~/echo")
+        tk.Entry(eb,textvariable=echo_path_var,bg=BG2,fg=TEXT,relief="flat",
+                 font=FONT_TINY,highlightthickness=1,highlightbackground=BORDER).pack(fill="x",pady=(6,4),ipady=3)
+        def save_echo():
+            import json,os
+            cfg={"echo_path":echo_path_var.get(),
+                 "shared_db":os.path.expanduser("~/vision_assistant/memory.db"),
+                 "shared_vosk":os.path.expanduser("~/vosk-model-small-en-us-0.15"),
+                 "shared_piper":os.path.expanduser("~/piper")}
+            with open(os.path.expanduser("~/vision_assistant/echo_bridge.json"),"w") as f:
+                json.dump(cfg,f,indent=2)
+            # Write config for Echo to read
+            echo_cfg_path=os.path.expanduser(echo_path_var.get()+"/vision_bridge.json")
+            try:
+                os.makedirs(os.path.dirname(echo_cfg_path),exist_ok=True)
+                with open(echo_cfg_path,"w") as f: json.dump(cfg,f,indent=2)
+            except: pass
+            self.show_toast("✓ Echo bridge configured",color=ACCENT3)
+        sbtn(eb,"Save Echo Path",save_echo,bg=ACCENT,px=10,py=4).pack(anchor="w",pady=(4,0))
+
+        section("ABOUT",TEXT3)
+        ab=tk.Frame(inner,bg=BG3,padx=14,pady=12); ab.pack(fill="x",padx=10,pady=(0,6))
+        for line in ["Vision Assistant v2","Modular AI desktop tool",
+                     "Voice: Vosk STT + Piper TTS",
+                     "Sync: JSON export for Android/Echo",
+                     "Built for Linux + Termux Android"]:
+            tk.Label(ab,text=line,bg=BG3,fg=TEXT2,font=FONT_SMALL).pack(anchor="w")
+
+        def save_s():
+            global SETTINGS
+            SETTINGS["time_format"]=tf_var.get()
+            SETTINGS["default_model"]=m_var.get()
+            SETTINGS["tts_enabled"]=tts_var.get()
+            SETTINGS["online_mode"]=net_var.get()
+            SETTINGS["menu_side"]=menu_side_var.get()
+            SETTINGS["chat_side"]=chat_side_var.get()
+            save_settings(SETTINGS)
+            self._apply_theme(th_var.get(), acc_var.get())
+
+        sbtn(inner,"SAVE SETTINGS",save_s,bg=ACCENT).pack(anchor="e",padx=14,pady=12)
+
+    # ── TASKS ─────────────────────────────────────────────────
+
+    def _add_page_header(self, title, color=None):
+        """Add a consistent header with back button to any page."""
+        if color is None: color=ACCENT
+        hdr=tk.Frame(self.panel_content,bg=BG,pady=6,padx=10)
+        hdr.pack(fill="x",side="top")
+        back=tk.Label(hdr,text="← Home",bg=BG,fg=TEXT3,
+                     font=FONT_TINY,cursor="hand2")
+        back.pack(side="left")
+        back.bind("<Button-1>",lambda e:self._show_welcome())
+        tk.Label(hdr,text=title,bg=BG,fg=color,
+                 font=("Segoe UI",12,"bold")).pack(side="left",padx=12)
+        tk.Frame(self.panel_content,bg=BORDER,height=1).pack(fill="x",padx=10)
+
+    def _page_tasks(self):
+        sf,inner=scrollable(self.panel_content); sf.pack(fill="both",expand=True)
+        tk.Frame(inner,bg=BG2,height=6).pack()
+
+        # Add form
+        af=tk.Frame(inner,bg=BG3,padx=12,pady=10); af.pack(fill="x",padx=10,pady=(0,8))
+        tk.Label(af,text="NEW GOAL",bg=BG3,fg=TEXT3,font=("Segoe UI",8,"bold")).pack(anchor="w")
+        entry=tk.Entry(af,bg=BG2,fg=TEXT,insertbackground=ACCENT,relief="flat",font=FONT_SMALL,
+                       highlightthickness=1,highlightbackground=BORDER)
+        entry.pack(fill="x",pady=(4,4),ipady=5)
+        row1=tk.Frame(af,bg=BG3); row1.pack(fill="x",pady=(0,4))
+        cat_var=tk.StringVar(value="personal")
+        tk.Label(row1,text="Cat:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        om=tk.OptionMenu(row1,cat_var,"personal","health","career","finance","learning")
+        om.config(bg=BG2,fg=TEXT,relief="flat",font=FONT_TINY,highlightthickness=0)
+        om["menu"].config(bg=BG2,fg=TEXT,activebackground=ACCENT); om.pack(side="left",padx=4)
+        row2=tk.Frame(af,bg=BG3); row2.pack(fill="x",pady=(0,6))
+        # Due date
+        tk.Label(row2,text="Due:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        due_entry=tk.Entry(row2,bg=BG2,fg=TEXT,insertbackground=ACCENT,relief="flat",
+                           font=FONT_TINY,width=10,
+                           highlightthickness=1,highlightbackground=BORDER)
+        due_entry.pack(side="left",padx=4,ipady=3)
+        due_entry.insert(0,"YYYY-MM-DD")
+        due_entry.bind("<FocusIn>",lambda e:(due_entry.delete(0,"end") if due_entry.get()=="YYYY-MM-DD" else None))
+        def add_task():
+            t=entry.get().strip()
+            if t:
+                import datetime as _dt
+                due=None
+                try:
+                    due_str=due_entry.get().strip()
+                    if due_str and due_str!="YYYY-MM-DD":
+                        due=_dt.datetime.strptime(due_str,"%Y-%m-%d").timestamp()
+                except: pass
+                add_goal(t,category=cat_var.get(),target_date=due)
+                entry.delete(0,"end")
+                self.open_page("tasks")
+        sbtn(af,"ADD",add_task,bg=ACCENT).pack(anchor="e")
+        entry.bind("<Return>",lambda e:add_task())
+
+        # Overdue tasks section
+        import datetime as _dt
+        all_goals=get_goals()
+        now_ts=_dt.datetime.now().timestamp()
+        overdue=[g for g in all_goals if g.get("due_date") and g["due_date"]<now_ts and g["status"]!="done"]
+        if overdue:
+            ov_frame=tk.Frame(inner,bg=DANGER,padx=10,pady=6); ov_frame.pack(fill="x",padx=10,pady=(0,6))
+            tk.Label(ov_frame,text=f"⚠  {len(overdue)} OVERDUE TASK{'S' if len(overdue)>1 else ''}",
+                     bg=DANGER,fg=WHITE,font=("Segoe UI",9,"bold")).pack(anchor="w")
+            for g in overdue:
+                due=_dt.datetime.fromtimestamp(g["due_date"])
+                days_late=(_dt.datetime.now()-due).days
+                lbl=f"  {g['title']}  —  {days_late}d overdue"
+                tk.Label(ov_frame,text=lbl,bg=DANGER,fg=WHITE,font=FONT_TINY).pack(anchor="w")
+        # Split goals by status
+        from memory import update_goal_status
+        sections=[
+            ("IN PROGRESS","inprogress",ACCENT2),
+            ("TO DO","later",WARN),
+            ("DONE","done",ACCENT3),
+        ]
+        # bucket goals
+        buckets={"inprogress":[],"later":[],"done":[]}
+        for g in all_goals:
+            st=g["status"] if g["status"] in buckets else "later"
+            buckets[st].append(g)
+
+        for label,key,color in sections:
+            items=buckets[key]
+            if not items: continue
+            tk.Label(inner,text=label,bg=BG2,fg=color,
+                     font=("Segoe UI",7,"bold"),padx=10).pack(anchor="w",pady=(8,2))
+            for g in items: self._goal_card(inner,g,color)
+
+        if not any(buckets.values()):
+            tk.Label(inner,text="No goals yet.",bg=BG2,fg=TEXT3,font=FONT_SMALL,pady=20).pack()
+
+
+
+    def _goal_card(self,parent,g,accent=None):
+        if accent is None: accent=ACCENT
+        bg=BG3
+        card=tk.Frame(parent,bg=bg,padx=10,pady=7,
+                     highlightthickness=1,highlightbackground=BORDER,cursor="hand2")
+        card.pack(fill="x",padx=10,pady=2)
+        r1=tk.Frame(card,bg=bg); r1.pack(fill="x")
+        done=g.get("status")=="done"
+        tk.Label(r1,text=g["title"],bg=bg,fg=TEXT3 if done else TEXT,
+                font=FONT_SMALL,anchor="w").pack(side="left",fill="x",expand=True)
+        st=g.get("status","active")
+        st_color={"done":ACCENT3,"abandoned":DANGER,"active":TEXT3}.get(st,TEXT3)
+        tk.Label(r1,text=st.upper(),bg=bg,fg=st_color,
+                font=("Segoe UI",7,"bold")).pack(side="right")
+        prog=g.get("progress",0) or 0
+        if prog>0:
+            pb=tk.Frame(card,bg=BG4,height=3); pb.pack(fill="x",pady=(3,0))
+            tk.Frame(pb,bg=accent,height=3).place(x=0,y=0,relwidth=min(1,prog/100),relheight=1)
+        if not done:
+            br=tk.Frame(card,bg=bg); br.pack(fill="x",pady=(4,0))
+            sbtn(br,"✓ Done",lambda gid=g["id"]:self._complete_goal(gid),bg=ACCENT3,fg=BG,px=8,py=2).pack(side="left",padx=(0,4))
+            sbtn(br,"✗ Drop",lambda gid=g["id"]:self._abandon_goal(gid),bg=BG4,fg=TEXT3,px=8,py=2).pack(side="left")
+            sbtn(br,f"{prog}%",lambda gid=g["id"],p=prog:self._set_progress(gid,p),bg=BG4,fg=TEXT3,px=8,py=2).pack(side="right")
+
+    def _complete_goal(self,gid):
+        from memory import update_goal_status as _ugs
+        _ugs(gid,"done"); self._page_dirty['tasks']=True; self.open_page('tasks')
+
+    def _abandon_goal(self,gid):
+        from memory import update_goal_status as _ugs
+        _ugs(gid,"abandoned"); self._page_dirty['tasks']=True; self.open_page('tasks')
+
+    def _set_progress(self,gid,current):
+        import sqlite3; from config import DB_PATH
+        win=tk.Toplevel(self); win.title("Progress")
+        win.geometry("260x100"); win.configure(bg=BG2)
+        win.attributes("-topmost",True)
+        pvar=tk.IntVar(value=current)
+        tk.Scale(win,from_=0,to=100,orient="horizontal",variable=pvar,
+                bg=BG2,fg=TEXT,highlightthickness=0,troughcolor=BG3).pack(fill="x",padx=16,pady=8)
+        def save():
+            conn=sqlite3.connect(DB_PATH)
+            conn.execute("UPDATE goals SET progress=? WHERE id=?",(pvar.get(),gid))
+            conn.commit(); conn.close()
+            _invalidate_cache("goals"); win.destroy(); self.open_page("tasks")
+        sbtn(win,"Save",save,bg=ACCENT,px=12,py=4).pack()
+
+
+    def _edit_goal(self,g):
+        win=tk.Toplevel(self); win.title("Edit Goal")
+        win.geometry("320x200"); win.configure(bg=BG2); win.lift(); win.focus_force()
+        tk.Label(win,text="TITLE",bg=BG2,fg=TEXT3,font=("Segoe UI",8,"bold")).pack(anchor="w",padx=16,pady=(12,2))
+        e=tk.Entry(win,bg=BG3,fg=TEXT,insertbackground=ACCENT,relief="flat",font=FONT_BODY,
+                   highlightthickness=1,highlightbackground=BORDER)
+        e.pack(fill="x",padx=16,ipady=6); e.insert(0,g["title"])
+        cat_var=tk.StringVar(value=g["category"] or "personal")
+        row=tk.Frame(win,bg=BG2); row.pack(fill="x",padx=16,pady=8)
+        tk.Label(row,text="Category:",bg=BG2,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        om=tk.OptionMenu(row,cat_var,"personal","health","career","finance","learning")
+        om.config(bg=BG3,fg=TEXT,relief="flat",font=FONT_TINY,highlightthickness=0)
+        om["menu"].config(bg=BG3,fg=TEXT,activebackground=ACCENT); om.pack(side="left",padx=4)
+        def save():
+            t=e.get().strip()
+            if t: update_goal(g["id"],t,category=cat_var.get()); win.destroy(); self.open_page("tasks")
+        br=tk.Frame(win,bg=BG2); br.pack(fill="x",padx=16)
+        sbtn(br,"SAVE",save,bg=ACCENT).pack(side="right",padx=(4,0))
+        sbtn(br,"CANCEL",win.destroy,bg=BG3,fg=TEXT2).pack(side="right")
+
+    # ── HABITS ────────────────────────────────────────────────
+
+    def _page_habits(self):
+        from memory import get_habit_completions_count, complete_habit_once, update_habit_target
+        sf,inner=scrollable(self.panel_content); sf.pack(fill="both",expand=True)
+        tk.Frame(inner,bg=BG2,height=6).pack()
+
+        af=tk.Frame(inner,bg=BG3,padx=12,pady=10); af.pack(fill="x",padx=10,pady=(0,8))
+        tk.Label(af,text="NEW HABIT",bg=BG3,fg=TEXT3,font=("Segoe UI",8,"bold")).pack(anchor="w")
+        entry=tk.Entry(af,bg=BG2,fg=TEXT,insertbackground=ACCENT2,relief="flat",font=FONT_SMALL,
+                       highlightthickness=1,highlightbackground=BORDER)
+        entry.pack(fill="x",pady=(4,4),ipady=5)
+        row=tk.Frame(af,bg=BG3); row.pack(fill="x",pady=(0,4))
+        freq_var=tk.StringVar(value="daily")
+        tk.Label(row,text="Freq:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        om=tk.OptionMenu(row,freq_var,"daily","weekly","monthly")
+        om.config(bg=BG2,fg=TEXT,relief="flat",font=FONT_TINY,highlightthickness=0)
+        om["menu"].config(bg=BG2,fg=TEXT,activebackground=ACCENT2); om.pack(side="left",padx=4)
+        tk.Label(row,text="Target:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left",padx=(8,0))
+        tgt_var=tk.StringVar(value="1")
+        tgt_spin=tk.Spinbox(row,from_=1,to=30,textvariable=tgt_var,width=3,
+                             bg=BG2,fg=TEXT,buttonbackground=BG3,relief="flat",font=FONT_TINY)
+        tgt_spin.pack(side="left",padx=4)
+        tk.Label(row,text="times",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        row2=tk.Frame(af,bg=BG3); row2.pack(fill="x",pady=(0,4))
+        tk.Label(row2,text="Category:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        hcat_var=tk.StringVar(value="general")
+        cat_colors_h={"general":TEXT3,"health":"#a5d6a7","mind":"#ce93d8","work":"#4fc3f7","fitness":"#ffcc80"}
+        hcat_om=tk.OptionMenu(row2,hcat_var,"general","health","mind","work","fitness")
+        hcat_om.config(bg=BG2,fg=TEXT,relief="flat",font=FONT_TINY,highlightthickness=0)
+        hcat_om["menu"].config(bg=BG2,fg=TEXT,activebackground=ACCENT2); hcat_om.pack(side="left",padx=4)
+        row2=tk.Frame(af,bg=BG3); row2.pack(fill="x",pady=(0,4))
+        tk.Label(row2,text="Category:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        hcat_var=tk.StringVar(value="general")
+        cat_colors_h={"general":TEXT3,"health":"#a5d6a7","mind":"#ce93d8","work":"#4fc3f7","fitness":"#ffcc80"}
+        hcat_om=tk.OptionMenu(row2,hcat_var,"general","health","mind","work","fitness")
+        hcat_om.config(bg=BG2,fg=TEXT,relief="flat",font=FONT_TINY,highlightthickness=0)
+        hcat_om["menu"].config(bg=BG2,fg=TEXT,activebackground=ACCENT2); hcat_om.pack(side="left",padx=4)
+        def add_h():
+            t=entry.get().strip()
+            if t:
+                add_habit(t,frequency=freq_var.get())
+                habits=get_habits()
+                if habits:
+                    h=habits[-1]
+                    update_habit_target(h["id"],int(tgt_var.get()),freq_var.get())
+                    # save category
+                    import sqlite3,os; from config import DB_PATH
+                    conn=sqlite3.connect(DB_PATH)
+                    conn.execute("UPDATE habits SET category=? WHERE id=?",(hcat_var.get(),h["id"]))
+                    conn.commit(); conn.close()
+                entry.delete(0,"end")
+                self.open_page("habits")
+        sbtn(af,"ADD",add_h,bg=ACCENT2,fg=BG).pack(anchor="e",pady=(4,0))
+        entry.bind("<Return>",lambda e:add_h())
+
+        habits=get_habits()
+        if not habits:
+            tk.Label(inner,text="No habits yet.",bg=BG2,fg=TEXT3,font=FONT_SMALL,pady=20).pack()
+
+        # Group by category
+        from collections import defaultdict
+        cat_groups=defaultdict(list)
+        cat_colors_map={"general":TEXT3,"health":"#a5d6a7","mind":"#ce93d8","work":"#4fc3f7","fitness":"#ffcc80"}
+        for h in habits:
+            cat_groups[h.get("category") or "general"].append(h)
+        habits_iter=[]
+        for cat_order in ["health","fitness","mind","work","general"]:
+            if cat_order in cat_groups:
+                if len(cat_groups)>1:
+                    tk.Label(inner,text=cat_order.upper(),bg=BG2,
+                             fg=cat_colors_map.get(cat_order,TEXT3),
+                             font=("Segoe UI",7,"bold"),padx=10).pack(anchor="w",pady=(8,2))
+                habits_iter.extend(cat_groups[cat_order])
+        # Pre-calculate all streaks in one DB call
+        import datetime as _dt2
+        from memory import get_db as _sdb
+        _sconn=_sdb()
+        _streak_cache={}
+        for _h in habits_iter:
+            _s=0; _d2=_dt2.date.today()
+            for _ in range(60):
+                _ds2=_d2.isoformat()
+                _cnt=_sconn.execute("SELECT COUNT(*) FROM habit_completions WHERE habit_id=? AND date_str=?",(_h["id"],_ds2)).fetchone()[0]
+                if _cnt: _s+=1; _d2-=_dt2.timedelta(days=1)
+                else: break
+            _streak_cache[_h["id"]]=_s
+        _sconn.close()
+
+        for h in habits_iter:
+            target=h["target"] if h["target"] else 1
+            period=h["period"] if h["period"] else h["frequency"]
+            count=get_habit_completions_count(h["id"],period)
+            done=(count>=target)
+
+            card=tk.Frame(inner,bg=BG3,padx=12,pady=8,highlightthickness=1,
+                          highlightbackground=ACCENT3 if done else BORDER)
+            card.pack(fill="x",padx=10,pady=3)
+
+            # Fast streak from cache
+            _streak=_streak_cache.get(h["id"],0)
+            # Header row
+            top=tk.Frame(card,bg=BG3); top.pack(fill="x")
+            name_row=tk.Frame(top,bg=BG3); name_row.pack(side="left",fill="x",expand=True)
+            tk.Label(name_row,text=h["name"],bg=BG3,fg=TEXT2 if done else TEXT,
+                     font=FONT_SMALL,anchor="w").pack(side="left")
+            if _streak>0:
+                streak_lbl=f"🔥{_streak}" if _streak>=3 else f"·{_streak}d"
+                tk.Label(name_row,text=streak_lbl,bg=BG3,
+                         fg=WARN if _streak>=3 else TEXT3,
+                         font=("Segoe UI",8,"bold")).pack(side="left",padx=4)
+            period_lbl=f"{h['frequency'].upper()}  ·  {count}/{target}"
+            tk.Label(top,text=period_lbl,bg=BG3,fg=TEXT3,font=("Segoe UI",7)).pack(side="right")
+
+            # Progress bar
+            bar_frame=tk.Frame(card,bg=BG2,height=6); bar_frame.pack(fill="x",pady=(6,4))
+            bar_frame.pack_propagate(False)
+            pct=min(1.0,count/target)
+            if pct>0:
+                fill=tk.Frame(bar_frame,bg=ACCENT3 if done else ACCENT2)
+                fill.place(x=0,y=0,relwidth=pct,relheight=1)
+
+            # Action row
+            act=tk.Frame(card,bg=BG3); act.pack(fill="x")
+            if not done:
+                check=tk.Label(act,text="＋ Log Once",bg=ACCENT2,fg=BG,
+                               font=("Segoe UI",8,"bold"),padx=8,pady=3,cursor="hand2")
+                check.pack(side="left",padx=(0,4))
+                check.bind("<Button-1>",lambda e,hid=h["id"]:(
+                    complete_habit_once(hid),self.open_page("habits")))
+            else:
+                tk.Label(act,text="✓ Complete!",bg=ACCENT3,fg=BG,
+                         font=("Segoe UI",8,"bold"),padx=8,pady=3).pack(side="left",padx=(0,4))
+
+            sbtn(act,"Edit",lambda hd=dict(h):self._edit_habit(hd),bg=BG4,fg=TEXT2,px=6,py=2).pack(side="left",padx=(0,3))
+            sbtn(act,"Delete",lambda hid=h["id"]:(delete_habit(hid),self.open_page("habits")),
+                 bg=DANGER,fg=WHITE,px=6,py=2).pack(side="left")
+
+    def _edit_habit(self,h):
+        from memory import update_habit_target
+        win=tk.Toplevel(self); win.title("Edit Habit")
+        win.geometry("320x260"); win.configure(bg=BG2); win.lift(); win.focus_force()
+        tk.Label(win,text="NAME",bg=BG2,fg=TEXT3,font=("Segoe UI",8,"bold")).pack(anchor="w",padx=16,pady=(12,2))
+        e=tk.Entry(win,bg=BG3,fg=TEXT,insertbackground=ACCENT2,relief="flat",font=FONT_BODY,
+                   highlightthickness=1,highlightbackground=BORDER)
+        e.pack(fill="x",padx=16,ipady=6); e.insert(0,h["name"])
+
+        row=tk.Frame(win,bg=BG2); row.pack(fill="x",padx=16,pady=8)
+        tk.Label(row,text="Frequency:",bg=BG2,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        freq_var=tk.StringVar(value=h["frequency"])
+        om=tk.OptionMenu(row,freq_var,"daily","weekly","monthly")
+        om.config(bg=BG3,fg=TEXT,relief="flat",font=FONT_TINY,highlightthickness=0)
+        om["menu"].config(bg=BG3,fg=TEXT,activebackground=ACCENT2); om.pack(side="left",padx=4)
+
+        row2=tk.Frame(win,bg=BG2); row2.pack(fill="x",padx=16,pady=(0,8))
+        tk.Label(row2,text="Target times per period:",bg=BG2,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        tgt_var=tk.StringVar(value=str(h["target"] if h["target"] else 1))
+        tgt_spin=tk.Spinbox(row2,from_=1,to=30,textvariable=tgt_var,width=4,
+                             bg=BG3,fg=TEXT,buttonbackground=BG4,relief="flat",font=FONT_TINY)
+        tgt_spin.pack(side="left",padx=8)
+
+        def save():
+            t=e.get().strip()
+            if t:
+                update_habit(h["id"],t,frequency=freq_var.get())
+                update_habit_target(h["id"],int(tgt_var.get()),freq_var.get())
+                win.destroy(); self.open_page("habits")
+        br=tk.Frame(win,bg=BG2); br.pack(fill="x",padx=16)
+        sbtn(br,"SAVE",save,bg=ACCENT2,fg=BG).pack(side="right",padx=(4,0))
+        sbtn(br,"CANCEL",win.destroy,bg=BG3,fg=TEXT2).pack(side="right")
+
+    # ── JOURNAL ───────────────────────────────────────────────
+
+    def _page_journal(self):
+        sf,inner=scrollable(self.panel_content); sf.pack(fill="both",expand=True)
+        tk.Frame(inner,bg=BG2,height=6).pack()
+        now=datetime.datetime.now()
+        hdr=tk.Frame(inner,bg=BG2,padx=14); hdr.pack(fill="x",pady=(0,6))
+        tk.Label(hdr,text=now.strftime("%A").upper(),bg=BG2,fg=ACCENT3,font=("Segoe UI",16,"bold")).pack(anchor="w")
+        tk.Label(hdr,text=now.strftime("%B %d, %Y"),bg=BG2,fg=TEXT3,font=("Segoe UI",9)).pack(anchor="w")
+        tk.Frame(inner,bg=BORDER,height=1).pack(fill="x",padx=14,pady=(0,10))
+        wf=tk.Frame(inner,bg=BG3,padx=14,pady=12,highlightthickness=1,highlightbackground=BORDER)
+        wf.pack(fill="x",padx=10,pady=(0,10))
+        tk.Label(wf,text="✦  Today's Entry",bg=BG3,fg=ACCENT3,font=("Segoe UI",9,"bold")).pack(anchor="w",pady=(0,6))
+        te=tk.Text(wf,bg=BG2,fg=TEXT,insertbackground=ACCENT3,relief="flat",
+                   font=("Segoe UI",10),height=6,highlightthickness=0,wrap="word",spacing1=4,spacing3=4)
+        te.pack(fill="x")
+        mf=tk.Frame(wf,bg=BG3); mf.pack(fill="x",pady=(8,4))
+        tk.Label(mf,text="Mood:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(side="left")
+        self._mood_var=tk.IntVar(value=3)
+        for emoji,val in [("😔",1),("😐",2),("🙂",3),("😊",4),("🤩",5)]:
+            tk.Radiobutton(mf,text=emoji,variable=self._mood_var,value=val,
+                           bg=BG3,activebackground=BG3,font=("Segoe UI",13),
+                           highlightthickness=0,cursor="hand2").pack(side="left",padx=2)
+        def save_entry():
+            entry_text=te.get("1.0","end").strip()
+            if entry_text:
+                save_journal_entry(entry_text,mood=self._mood_var.get())
+                te.delete("1.0","end")
+                self.open_page("journal")
+        sbtn(wf,"SAVE ENTRY",save_entry,bg=ACCENT3,fg=BG).pack(anchor="e",pady=(6,0))
+        tk.Label(inner,text="PAST ENTRIES",bg=BG2,fg=TEXT3,font=("Segoe UI",7,"bold"),padx=14).pack(anchor="w",pady=(4,4))
+        entries=get_journal_entries(limit=30)
+        moods_map={1:"😔",2:"😐",3:"🙂",4:"😊",5:"🤩"}
+        if not entries:
+            tk.Label(inner,text="No entries yet.",bg=BG2,fg=TEXT3,font=FONT_SMALL,pady=10,padx=14).pack(anchor="w")
+        for ent in entries:
+            dt=datetime.datetime.fromtimestamp(ent["timestamp"])
+            card=tk.Frame(inner,bg=BG3,padx=12,pady=10,highlightthickness=1,highlightbackground=BORDER)
+            card.pack(fill="x",padx=10,pady=3)
+            top=tk.Frame(card,bg=BG3); top.pack(fill="x")
+            tk.Label(top,text=dt.strftime("%b %d, %Y"),bg=BG3,fg=ACCENT3,font=("Segoe UI",8,"bold")).pack(side="left")
+            tk.Label(top,text=moods_map.get(ent["mood"] or 3,"🙂"),bg=BG3,font=("Segoe UI",11)).pack(side="left",padx=6)
+            tk.Label(top,text=dt.strftime("%H:%M"),bg=BG3,fg=TEXT3,font=("Segoe UI",8)).pack(side="left")
+            preview=ent["content"][:140]+("…" if len(ent["content"])>140 else "")
+            tk.Label(card,text=preview,bg=BG3,fg=TEXT2,font=("Segoe UI",9),
+                     wraplength=220,justify="left",anchor="w").pack(fill="x",pady=(4,6))
+            br=tk.Frame(card,bg=BG3); br.pack(fill="x")
+            sbtn(br,"Edit",lambda ed={k:ent[k] for k in ent.keys()}:self._edit_journal(ed),bg=BG4,fg=TEXT2,px=6,py=2).pack(side="left",padx=(0,3))
+            sbtn(br,"Delete",lambda eid=ent["id"]:(delete_journal_entry(eid),self.open_page("journal")),
+                 bg=DANGER,fg=WHITE,px=6,py=2).pack(side="left")
+
+    def _edit_journal(self,entry):
+        win=tk.Toplevel(self); win.title("Edit Entry")
+        win.geometry("420x320"); win.configure(bg=BG2); win.lift(); win.focus_force()
+        tk.Label(win,text="EDIT ENTRY",bg=BG2,fg=ACCENT3,font=("Segoe UI",9,"bold")).pack(anchor="w",padx=16,pady=(12,6))
+        te=tk.Text(win,bg=BG3,fg=TEXT,insertbackground=ACCENT3,relief="flat",font=FONT_BODY,
+                   height=10,highlightthickness=1,highlightbackground=BORDER,wrap="word")
+        te.pack(fill="both",expand=True,padx=16)
+        te.insert("1.0",entry["content"])
+        te.focus_set()
+        def save():
+            edit_text=te.get("1.0","end").strip()
+            if edit_text:
+                update_journal_entry(entry["id"],edit_text)
+                win.destroy()
+                self.open_page("journal")
+        br=tk.Frame(win,bg=BG2); br.pack(fill="x",padx=16,pady=10)
+        sbtn(br,"SAVE",save,bg=ACCENT3,fg=BG).pack(side="right",padx=(4,0))
+        sbtn(br,"CANCEL",win.destroy,bg=BG3,fg=TEXT2).pack(side="right")
+
+    # ── CALENDAR ──────────────────────────────────────────────
+
+    def _ev_type(self,ev):
+        t=ev.get("title","")
+        if "Journal:" in t or any(t.startswith(e) for e in ["🙂","😔","😐","😊","🤩"]): return "journal"
+        if "Habit:" in t or t.startswith("◈"): return "habit"
+        if "Goal:" in t or "Due:" in t or t.startswith("🎯"): return "goal"
+        return "event"
+
+    def _filter_events(self,events):
+        out=[]
+        for ev in events:
+            if not isinstance(ev,dict): ev={k:ev[k] for k in ev.keys()}
+            t=self._ev_type(ev)
+            if self.cal_filters.get(t,True):
+                out.append(ev)
+        if self.cal_sort=="newest":
+            out.sort(key=lambda e:e["start_time"],reverse=True)
+        else:
+            out.sort(key=lambda e:e["start_time"])
+        return out
+
+    def _page_calendar(self):
+        self._show_full_calendar()
+
+
+
+    def _show_full_calendar(self):
+        for w in self.main_area.winfo_children():
+            if getattr(w,'_is_cal_frame',False): w.destroy()
+        cal_root=tk.Frame(self.main_area,bg=BG)
+        cal_root._is_cal_frame=True
+        # destroy old main_content first
+        if hasattr(self,'main_content') and self.main_content.winfo_exists(): self.main_content.destroy()
+        self.main_content=cal_root
+        cal_root.place(x=0,y=44,relwidth=1,relheight=1,height=-44)
+        cal_root.columnconfigure(0,weight=1); cal_root.rowconfigure(2,weight=1)
+        top=tk.Frame(cal_root,bg=BG,pady=8,padx=16); top.grid(row=0,column=0,sticky="ew")
+        back=tk.Label(top,text="← Back",bg=BG,fg=ACCENT,font=("Segoe UI",10,"bold"),cursor="hand2",padx=8)
+        back.pack(side="left")
+        def go_back():
+            cal_root.destroy()
+            self.active_page=None
+        back.bind("<Button-1>",lambda e:go_back())
+        nav=tk.Frame(top,bg=BG); nav.pack(side="left",padx=16)
+        prev=tk.Label(nav,text="◀",bg=BG,fg=TEXT2,cursor="hand2",font=("Segoe UI",14),padx=8)
+        prev.pack(side="left")
+        prev.bind("<Button-1>",lambda e:(self._cal_nav(-1),self._refresh_full_cal(cal_root)))
+        self.cal_label=tk.Label(nav,text="",bg=BG,fg=WARN,font=("Segoe UI",13,"bold"))
+        self.cal_label.pack(side="left",padx=8)
+        nxt=tk.Label(nav,text="▶",bg=BG,fg=TEXT2,cursor="hand2",font=("Segoe UI",14),padx=8)
+        nxt.pack(side="left")
+        nxt.bind("<Button-1>",lambda e:(self._cal_nav(1),self._refresh_full_cal(cal_root)))
+        tabs=tk.Frame(top,bg=BG); tabs.pack(side="left",padx=8)
+        for v,l in [("month","Month"),("week","Week"),("day","Day"),("list","List")]:
+            active=(self.cal_view==v)
+            b=tk.Label(tabs,text=l,bg=ACCENT if active else BG3,fg=WHITE if active else TEXT2,
+                       font=("Segoe UI",10,"bold"),padx=14,pady=6,cursor="hand2")
+            b.pack(side="left",padx=2)
+            b.bind("<Button-1>",lambda e,view=v:(self._switch_cal_view(view),self._refresh_full_cal(cal_root)))
+        fb=tk.Frame(top,bg=BG); fb.pack(side="left",padx=8)
+        for key,lbl,color in [("event","◆ Events","#7c6af7"),("journal","✦ Journal","#a5d6a7"),
+                               ("habit","◈ Habits","#4fc3f7"),("goal","🎯 Goals","#ce93d8")]:
+            active=self.cal_filters.get(key,True)
+            btn=tk.Label(fb,text=lbl,bg=color if active else BG3,fg=WHITE if active else TEXT3,
+                         font=("Segoe UI",9,"bold"),padx=10,pady=5,cursor="hand2")
+            btn.pack(side="left",padx=2)
+            def toggle(k=key): self.cal_filters[k]=not self.cal_filters.get(k,True); self._refresh_full_cal(cal_root)
+            btn.bind("<Button-1>",lambda e,t=toggle:t())
+        right=tk.Frame(top,bg=BG); right.pack(side="right")
+        sort_lbl="↓ Newest" if self.cal_sort=="newest" else "↑ Oldest"
+        sort_btn=tk.Label(right,text=sort_lbl,bg=BG3,fg=TEXT2,font=("Segoe UI",9,"bold"),padx=10,pady=5,cursor="hand2")
+        sort_btn.pack(side="left",padx=4)
+        def toggle_sort(): self.cal_sort="oldest" if self.cal_sort=="newest" else "newest"; self._refresh_full_cal(cal_root)
+        sort_btn.bind("<Button-1>",lambda e:toggle_sort())
+        sbtn(right,"+ Add Event",lambda:EventDialog(self,on_save=lambda:self._refresh_full_cal(cal_root)),bg=ACCENT,px=14,py=5).pack(side="left")
+        tk.Frame(cal_root,bg=BORDER,height=1).grid(row=1,column=0,sticky="ew")
+        self._cal_content_frame=tk.Frame(cal_root,bg=BG)
+        self._cal_content_frame.grid(row=2,column=0,sticky="nsew",padx=16,pady=8)
+        self._cal_content_frame.columnconfigure(0,weight=1); self._cal_content_frame.rowconfigure(0,weight=1)
+        self._render_cal_content()
+
+    def _refresh_full_cal(self,cal_root):
+        self._show_full_calendar()
+
+    def _render_cal_content(self):
+        for w in self._cal_content_frame.winfo_children(): w.destroy()
+        if self.cal_view=="month": self._cal_month(self._cal_content_frame)
+        elif self.cal_view=="week": self._cal_week(self._cal_content_frame)
+        elif self.cal_view=="day": self._cal_day(self._cal_content_frame)
+        else: self._cal_list(self._cal_content_frame)
+
+    def _cal_nav(self,d):
+        if self.cal_view=="month":
+            m=self.cal_date.month+d; y=self.cal_date.year
+            if m>12: m=1; y+=1
+            elif m<1: m=12; y-=1
+            try: self.cal_date=self.cal_date.replace(year=y,month=m,day=1)
+            except: self.cal_date=datetime.date(y,m,1)
+        elif self.cal_view=="week": self.cal_date+=datetime.timedelta(weeks=d)
+        else: self.cal_date+=datetime.timedelta(days=d)
+
+    def _switch_cal_view(self,view):
+        self.cal_view=view
+
+    def _get_events(self,s,e):
+        raw=get_calendar_events(s.timestamp(),e.timestamp())
+        return self._filter_events(raw)
+
+    def _cal_list(self,parent):
+        self.cal_label.config(text="ALL EVENTS")
+        sf,inner=scrollable(parent,bg=BG); sf.pack(fill="both",expand=True)
+        all_events=get_calendar_events()
+        filtered=self._filter_events(all_events)
+        if not filtered:
+            tk.Label(inner,text="No events match current filters.",bg=BG,fg=TEXT3,font=FONT_SMALL,pady=20).pack()
+            return
+        from collections import OrderedDict
+        groups=OrderedDict()
+        for ev in filtered:
+            if not isinstance(ev,dict): ev={k:ev[k] for k in ev.keys()}
+            d=datetime.date.fromtimestamp(ev["start_time"]); groups.setdefault(d,[]).append(ev)
+        today=datetime.date.today()
+        for d,evs in groups.items():
+            is_today=(d==today)
+            dh=tk.Frame(inner,bg=ACCENT if is_today else BG3,padx=12,pady=8); dh.pack(fill="x",pady=(8,0))
+            date_str="TODAY" if is_today else d.strftime("%A, %B %d %Y").upper()
+            tk.Label(dh,text=date_str,bg=ACCENT if is_today else BG3,fg=WHITE if is_today else TEXT2,
+                     font=("Segoe UI",11,"bold")).pack(anchor="w")
+            for ev in evs:
+                icon,icon_color=self._ev_icon(ev)
+                bg=ev.get("color") or ACCENT
+                card=tk.Frame(inner,bg=BG3,highlightthickness=1,highlightbackground=BORDER,cursor="hand2")
+                card.pack(fill="x",pady=2)
+                bar=tk.Frame(card,bg=icon_color,width=6); bar.pack(side="left",fill="y")
+                badge=tk.Frame(card,bg=bg,width=48); badge.pack(side="left",fill="y"); badge.pack_propagate(False)
+                tk.Label(badge,text=icon,bg=bg,fg=WHITE,font=("Segoe UI",18)).pack(expand=True)
+                content=tk.Frame(card,bg=BG3,padx=12,pady=10); content.pack(side="left",fill="both",expand=True)
+                title=ev.get("title","")
+                for prefix in ["✓ Goal: ","◈ Habit: ","🎯 Due: "]:
+                    if title.startswith(prefix): title=title[len(prefix):]; break
+                for emoji in ["🙂 ","😔 ","😐 ","😊 ","🤩 "]:
+                    if title.startswith(emoji): title="Journal: "+title[10:]; break
+                tk.Label(content,text=title,bg=BG3,fg=TEXT,font=("Segoe UI",12,"bold"),
+                         wraplength=500,anchor="w",justify="left").pack(anchor="w")
+                t=fmt_time(datetime.datetime.fromtimestamp(ev["start_time"]))
+                tk.Label(content,text=f"{t}  ·  {self._ev_type(ev).title()}",bg=BG3,fg=icon_color,
+                         font=("Segoe UI",9)).pack(anchor="w",pady=(2,0))
+                desc=ev.get("description") or ""
+                if desc:
+                    tk.Label(content,text=desc[:120]+("…" if len(desc)>120 else ""),
+                             bg=BG3,fg=TEXT2,font=("Segoe UI",10),wraplength=500,anchor="w").pack(anchor="w",pady=(2,0))
+                act=tk.Frame(content,bg=BG3); act.pack(anchor="w",pady=(6,0))
+                sbtn(act,"Edit",lambda ed=dict(ev):EventDialog(self,event=ed,on_save=lambda:self._refresh_full_cal(None)),
+                     bg=BG4,fg=TEXT2,px=10,py=3).pack(side="left",padx=(0,4))
+                sbtn(act,"Delete",lambda eid=ev["id"]:(delete_calendar_event(eid),self._show_full_calendar()),
+                     bg=DANGER,fg=WHITE,px=10,py=3).pack(side="left")
+                for w in (card,badge,content):
+                    w.bind("<Button-1>",lambda e,ed=dict(ev):self._event_detail(ed))
+
+    def _ev_icon(self,ev):
+        t=ev.get("title","")
+        if "Journal:" in t or any(t.startswith(e) for e in ["🙂","😔","😐","😊","🤩"]): return "✦","#a5d6a7"
+        if "Habit:" in t or t.startswith("◈"): return "◈","#4fc3f7"
+        if "Goal:" in t or "Due:" in t or t.startswith("🎯"): return "🎯","#ce93d8"
+        return "◆",ev.get("color") or "#7c6af7"
+
+    def _event_pill(self,parent,ev):
+        ev_data={k:ev[k] for k in ev.keys()} if not isinstance(ev,dict) else dict(ev)
+        icon,icon_color=self._ev_icon(ev_data)
+        bg=ev_data.get("color") or "#7c6af7"
+        t=fmt_time(datetime.datetime.fromtimestamp(ev_data["start_time"]))
+        f=tk.Frame(parent,bg=bg,cursor="hand2")
+        badge=tk.Frame(f,bg=icon_color,width=32); badge.pack(side="left",fill="y"); badge.pack_propagate(False)
+        tk.Label(badge,text=icon,bg=icon_color,fg=WHITE,font=("Segoe UI",14)).pack(expand=True)
+        content=tk.Frame(f,bg=bg,padx=8,pady=5); content.pack(side="left",fill="both",expand=True)
+        title_short=ev_data["title"]
+        for prefix in ["✓ Goal: ","◈ Habit: ","🎯 Due: "]:
+            if title_short.startswith(prefix): title_short=title_short[len(prefix):]; break
+        lbl=tk.Label(content,text=f"{t}  {title_short[:22]}",bg=bg,fg=WHITE,font=("Segoe UI",10,"bold"))
+        lbl.pack(anchor="w",pady=2)
+        for w in (f,badge,content,lbl):
+            w.bind("<ButtonPress-1>",lambda e,d=ev_data:self._drag_start_ev(e,d))
+            w.bind("<B1-Motion>",lambda e:self._drag_motion(e))
+            w.bind("<ButtonRelease-1>",lambda e:self._drag_end(e))
+            w.bind("<Double-Button-1>",lambda e,d=ev_data:self._open_edit(d))
+            w.bind("<Button-1>",lambda e,d=ev_data:self._event_detail(d))
+        return f
+
+    def _drag_start_ev(self,e,ev):
+        self._drag_event=ev; self._drag_origin=(e.x_root,e.y_root); self._did_drag=False
+
+    def _drag_motion(self,e):
+        if not self._drag_origin: return
+        dx=e.x_root-self._drag_origin[0]; dy=e.y_root-self._drag_origin[1]
+        if abs(dx)>8 or abs(dy)>8: self._did_drag=True
+
+    def _drag_end(self,e):
+        if not self._drag_event or not self._drag_origin: return
+        did=self._did_drag; evdata=self._drag_event
+        self._drag_event=None; self._drag_origin=None; self._did_drag=False
+        if did: self._move_event_dialog(evdata)
+
+    def _open_edit(self,ev):
+        if not isinstance(ev,dict): ev={k:ev[k] for k in ev.keys()}
+        EventDialog(self,event=ev,on_save=self._page_calendar)
+
+    def _move_event_dialog(self,ev):
+        win=tk.Toplevel(self); win.title("Move Event"); win.geometry("340x200")
+        win.configure(bg=BG2); win.attributes('-topmost',True); win.lift(); win.focus_force()
+        orig=datetime.datetime.fromtimestamp(ev["start_time"])
+        tk.Label(win,text=f"Move:  {ev['title']}",bg=BG2,fg=TEXT,font=("Segoe UI",10,"bold")).pack(anchor="w",padx=16,pady=(14,2))
+        tk.Label(win,text=orig.strftime("Currently: %A %b %d, %Y  %H:%M"),bg=BG2,fg=TEXT3,font=FONT_TINY).pack(anchor="w",padx=16,pady=(0,8))
+        tk.Label(win,text="NEW DATE",bg=BG2,fg=TEXT3,font=("Segoe UI",8,"bold")).pack(anchor="w",padx=16)
+        row=tk.Frame(win,bg=BG2); row.pack(fill="x",padx=16,pady=4)
+        yr=tk.StringVar(value=str(orig.year)); mo=tk.StringVar(value=f"{orig.month:02d}"); dy=tk.StringVar(value=f"{orig.day:02d}")
+        for var,vals,w in [(yr,[str(y) for y in range(2024,2036)],7),(mo,[f"{m:02d}" for m in range(1,13)],5),(dy,[f"{d:02d}" for d in range(1,32)],5)]:
+            om=tk.OptionMenu(row,var,*vals); om.config(bg=BG3,fg=TEXT,relief="flat",font=FONT_SMALL,highlightthickness=1,highlightbackground=BORDER,width=w)
+            om["menu"].config(bg=BG3,fg=TEXT,activebackground=ACCENT); om.pack(side="left",padx=(0,4))
+        def do_move():
+            try:
+                new_dt=datetime.datetime(int(yr.get()),int(mo.get()),int(dy.get()),orig.hour,orig.minute)
+                diff=new_dt.timestamp()-orig.timestamp()
+                ns=ev["start_time"]+diff; ne=(ev["end_time"] or ev["start_time"]+3600)+diff
+                update_calendar_event(ev["id"],ev["title"],ns,ne,ev.get("description") or "",ev["all_day"],ev.get("color") or ACCENT)
+                win.destroy(); self.cal_date=new_dt.date(); self._show_full_calendar()
+            except Exception as ex: tk.Label(win,text=f"Error: {ex}",bg=BG2,fg=DANGER,font=FONT_TINY).pack()
+        br=tk.Frame(win,bg=BG2); br.pack(fill="x",padx=16,pady=12)
+        sbtn(br,"MOVE",do_move,bg=ACCENT).pack(side="right",padx=(4,0))
+        sbtn(br,"CANCEL",win.destroy,bg=BG3,fg=TEXT2).pack(side="right")
+
+    def _cal_month(self,parent):
+        y,m=self.cal_date.year,self.cal_date.month
+        self.cal_label.config(text=f"{calendar.month_name[m].upper()}  {y}")
+        sf,inner=scrollable(parent,bg=BG); sf.pack(fill="both",expand=True)
+        hdr=tk.Frame(inner,bg=BG); hdr.pack(fill="x",pady=(0,4))
+        for d in ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]:
+            tk.Label(hdr,text=d,bg=BG,fg=TEXT3,font=("Segoe UI",10,"bold")).pack(side="left",expand=True)
+        last=calendar.monthrange(y,m)[1]
+        events=self._get_events(datetime.datetime(y,m,1),datetime.datetime(y,m,last,23,59))
+        ev_by_day={}
+        for ev in events:
+            if not isinstance(ev,dict): ev={k:ev[k] for k in ev.keys()}
+            d=datetime.date.fromtimestamp(ev["start_time"]); ev_by_day.setdefault(d,[]).append(ev)
+        today=datetime.date.today()
+        grid_frame=tk.Frame(inner,bg=BG); grid_frame.pack(fill="both",expand=True)
+        for col in range(7): grid_frame.columnconfigure(col,weight=1,uniform="col")
+        for week_i,week in enumerate(calendar.monthcalendar(y,m)):
+            grid_frame.rowconfigure(week_i,weight=1,uniform="row")
+            for col_i,day in enumerate(week):
+                cell=tk.Frame(grid_frame,bg=BG3 if day else BG,highlightthickness=1,highlightbackground=BORDER)
+                cell.grid(row=week_i,column=col_i,sticky="nsew",padx=1,pady=1)
+                if day:
+                    d=datetime.date(y,m,day); is_today=(d==today)
+                    num_lbl=tk.Label(cell,text=str(day),bg=ACCENT if is_today else BG3,
+                                     fg=WHITE if is_today else TEXT2,font=("Segoe UI",13,"bold"),width=3,pady=6)
+                    num_lbl.pack(anchor="ne",padx=4,pady=4)
+                    num_lbl.bind("<Double-Button-1>",lambda e,dt=datetime.datetime(y,m,day):EventDialog(self,default_dt=dt,on_save=self._page_calendar))
+                    for ev in ev_by_day.get(d,[])[:4]:
+                        p=self._event_pill(cell,ev); p.pack(fill="x",padx=2,pady=1)
+                    tk.Frame(cell,bg=BG3,height=8).pack()
+
+    def _cal_week(self,parent):
+        monday=self.cal_date-datetime.timedelta(days=self.cal_date.weekday())
+        sunday=monday+datetime.timedelta(days=6)
+        self.cal_label.config(text=f"{monday.strftime('%b %d')} – {sunday.strftime('%b %d, %Y')}")
+        sf,inner=scrollable(parent,bg=BG); sf.pack(fill="both",expand=True)
+        events=self._get_events(datetime.datetime.combine(monday,datetime.time.min),datetime.datetime.combine(sunday,datetime.time.max))
+        today=datetime.date.today()
+        cols=tk.Frame(inner,bg=BG); cols.pack(fill="both",expand=True)
+        for i in range(7):
+            d=monday+datetime.timedelta(days=i); is_today=(d==today)
+            day_events=[ev for ev in events if datetime.date.fromtimestamp(ev["start_time"] if isinstance(ev,dict) else ev["start_time"])==d]
+            df=tk.Frame(cols,bg=BG4 if is_today else BG3,highlightthickness=2,highlightbackground=ACCENT if is_today else BORDER)
+            df.pack(side="left",fill="both",expand=True,padx=2,pady=2)
+            tk.Label(df,text=d.strftime("%a").upper(),bg=df["bg"],fg=ACCENT if is_today else TEXT2,font=("Segoe UI",9,"bold")).pack(anchor="w",padx=8,pady=(8,0))
+            tk.Label(df,text=d.strftime("%d"),bg=df["bg"],fg=ACCENT if is_today else TEXT,font=("Segoe UI",20,"bold")).pack(anchor="w",padx=8,pady=(0,6))
+            tk.Frame(df,bg=BORDER,height=1).pack(fill="x",padx=4)
+            for ev in day_events:
+                p=self._event_pill(df,ev); p.pack(fill="x",padx=4,pady=2)
+            if not day_events: tk.Label(df,text="—",bg=df["bg"],fg=TEXT3,font=FONT_SMALL,pady=8).pack()
+
+    def _cal_day(self,parent):
+        self.cal_label.config(text=self.cal_date.strftime("%A  %B %d, %Y").upper())
+        sf,inner=scrollable(parent,bg=BG); sf.pack(fill="both",expand=True)
+        day_start=datetime.datetime.combine(self.cal_date,datetime.time.min)
+        day_end=datetime.datetime.combine(self.cal_date,datetime.time.max)
+        events=self._get_events(day_start,day_end)
+        allday=[ev for ev in events if (ev["all_day"] if isinstance(ev,dict) else ev["all_day"])]
+        if allday:
+            adf=tk.Frame(inner,bg=BG3,padx=8,pady=6); adf.pack(fill="x",pady=(0,4))
+            tk.Label(adf,text="ALL DAY",bg=BG3,fg=TEXT3,font=("Segoe UI",8,"bold")).pack(anchor="w")
+            for ev in allday:
+                p=self._event_pill(adf,ev); p.pack(fill="x",pady=2)
+        for h in range(0,24):
+            slot=tk.Frame(inner,bg=BG,highlightthickness=1,highlightbackground=BORDER)
+            slot.pack(fill="x",pady=0)
+            tlbl=fmt_time(datetime.datetime.combine(self.cal_date,datetime.time(h,0)))
+            tk.Label(slot,text=tlbl,bg=BG,fg=TEXT3,font=("Segoe UI",10),width=10,pady=6).pack(side="left")
+            tk.Frame(slot,bg=BORDER,width=1).pack(side="left",fill="y")
+            content=tk.Frame(slot,bg=BG); content.pack(side="left",fill="both",expand=True,padx=4)
+            hour_events=[ev for ev in events if not (ev["all_day"] if isinstance(ev,dict) else ev["all_day"]) and datetime.datetime.fromtimestamp(ev["start_time"] if isinstance(ev,dict) else ev["start_time"]).hour==h]
+            for ev in hour_events:
+                p=self._event_pill(content,ev); p.pack(fill="x",pady=2)
+            if not hour_events: tk.Frame(content,bg=BG,height=36).pack()
+
+    def _event_detail(self,ev):
+        if not isinstance(ev,dict): ev={k:ev[k] for k in ev.keys()}
+        icon,icon_color=self._ev_icon(ev)
+        win=tk.Toplevel(self); win.title("Event Detail"); win.geometry("380x320")
+        win.configure(bg=BG2); win.lift(); win.focus_force()
+        header=tk.Frame(win,bg=icon_color,height=40); header.pack(fill="x"); header.pack_propagate(False)
+        title=ev.get("title","")
+        for prefix in ["✓ Goal: ","◈ Habit: ","🎯 Due: "]:
+            if title.startswith(prefix): title=title[len(prefix):]; break
+        tk.Label(header,text=f"{icon}  {title[:40]}",bg=icon_color,fg=WHITE,font=("Segoe UI",11,"bold"),padx=12).pack(side="left",pady=8)
+        info=tk.Frame(win,bg=BG2,padx=16,pady=10); info.pack(fill="x")
+        dt=datetime.datetime.fromtimestamp(ev["start_time"])
+        tk.Label(info,text=dt.strftime("%A, %B %d %Y"),bg=BG2,fg=TEXT,font=("Segoe UI",11,"bold")).pack(anchor="w")
+        tk.Label(info,text=fmt_time(dt),bg=BG2,fg=icon_color,font=("Segoe UI",10)).pack(anchor="w")
+        type_name=self._ev_type(ev).title()
+        tk.Label(info,text=type_name.upper(),bg=icon_color,fg=WHITE,font=("Segoe UI",8,"bold"),padx=6,pady=2).pack(anchor="w",pady=(4,0))
+        desc=ev.get("description") or ""
+        if desc:
+            tk.Frame(win,bg=BORDER,height=1).pack(fill="x",padx=16)
+            df=tk.Frame(win,bg=BG3,padx=12,pady=8); df.pack(fill="x",padx=16,pady=8)
+            tk.Label(df,text=desc[:200]+("…" if len(desc)>200 else ""),bg=BG3,fg=TEXT2,font=("Segoe UI",10),wraplength=320,justify="left").pack(fill="x")
+        br=tk.Frame(win,bg=BG2); br.pack(fill="x",padx=16,pady=12,side="bottom")
+        ev_copy=dict(ev)
+        def do_delete():
+            delete_calendar_event(ev_copy["id"]); win.destroy(); self._show_full_calendar()
+        def do_edit():
+            win.destroy(); self.after(10,lambda:EventDialog(self,event=ev_copy,on_save=self._page_calendar))
+        sbtn(br,"Delete",do_delete,bg=DANGER,fg=WHITE).pack(side="right",padx=(4,0))
+        sbtn(br,"Edit",do_edit,bg=BG4,fg=TEXT2).pack(side="right",padx=(4,0))
+        sbtn(br,"Close",win.destroy,bg=BG3,fg=TEXT2).pack(side="left")
+
+
+    def set_capture(self,screenshot_path,ocr_text):
+        self.last_screenshot=screenshot_path; self.last_ocr=ocr_text
+
+    def display_image(self,image_path):
+        if not hasattr(self,"chat_text"): return
+        if not self.bubble_open: self._toggle_bubble()
+        try:
+            img=Image.open(image_path)
+            if img.width>440:
+                r=440/img.width; img=img.resize((int(img.width*r),int(img.height*r)),Image.LANCZOS)
+            photo=ImageTk.PhotoImage(img); self.images.append(photo)
+            self.chat_text.configure(state="normal")
+            self.chat_text.image_create("end",image=photo)
+            self.chat_text.insert("end","\n\n")
+            self.chat_text.configure(state="disabled"); self.chat_text.see("end")
+        except Exception as e: self.append_chat("system",f"Image error: {e}")
+
+    def append_chat(self,role,message):
+        if not hasattr(self,"chat_text"): return
+        if role.lower() in ("you","ai") and not self.bubble_open:
+            self.after(0,self._toggle_bubble)
+        prefix={"system":"  ·  ","you":"  ▸  YOU  ","ai":"  ▸  AI  ","ocr":"  ▸  OCR  ","task":"  ▸  TASK  ","output":"  ▸  OUTPUT  "}.get(role.lower(),f"  ▸  {role.upper()}  ")
+        self.chat_text.configure(state="normal")
+        self.chat_text.insert("end",prefix,f"role_{role.lower()}")
+        self.chat_text.insert("end",f"{message}\n\n")
+        self.chat_text.configure(state="disabled"); self.chat_text.see("end")
+
+    def append_divider(self):
+        if not hasattr(self,"chat_text"): return
+        self.chat_text.configure(state="normal")
+        self.chat_text.insert("end","\n  ·  "+"─"*48+"\n\n","divider")
+        self.chat_text.configure(state="disabled"); self.chat_text.see("end")
+
+    def refresh_models(self):
+        self.models=fetch_available_models()
+        menu=self.model_menu["menu"]; menu.delete(0,"end")
+        for m in self.models: menu.add_command(label=m,command=lambda v=m:self.model.set(v))
+        if self.models: self.model.set(self.models[0])
+        self.append_chat("system",f"Models: {', '.join(self.models)}")
+
+    def attach_file(self):
+        p=filedialog.askopenfilename()
+        if p: self.append_chat("system",f"Attached: {p}")
+
+    def record_voice(self):
+        try:
+            from voice import record_once, vosk_available
+            if not vosk_available():
+                self.append_chat("system","Vosk model not found.")
+                return
+            # Show pulsing indicator
+            self._set_mic_state(True)
+            def on_result(text, err):
+                self.after(0, lambda: self._set_mic_state(False))
+                if err:
+                    self.after(0,lambda:self.append_chat("system",f"Voice error: {err}"))
+                elif text:
+                    self.after(0,lambda:self._submit_voice(text))
+                else:
+                    self.after(0,lambda:self.append_chat("system","No speech detected."))
+            record_once(timeout=6, callback=on_result)
+        except Exception as e:
+            self._set_mic_state(False)
+            self.append_chat("system",f"Voice error: {e}")
+
+    def _set_mic_state(self, listening):
+        """Update mic button appearance and pulse animation."""
+        self._mic_listening = listening
+        try:
+            if listening:
+                self._mic_btn.configure(bg=DANGER, text="◉")
+                self._pulse_mic()
+            else:
+                self._mic_btn.configure(bg=BG3, text="🎤")
+        except: pass
+
+    def _pulse_mic(self):
+        """Pulse the mic button while listening."""
+        if not getattr(self, "_mic_listening", False): return
+        try:
+            cur = self._mic_btn["bg"]
+            next_bg = BG3 if cur == DANGER else DANGER
+            self._mic_btn.configure(bg=next_bg)
+            self.after(400, self._pulse_mic)
+        except: pass
+
+    def _submit_voice(self,text):
+        # Try voice commands first
+        if self._process_voice_command(text):
+            self.append_chat("system",f"🎤 {text}")
+            return
+        # Otherwise send to AI
+        self.append_chat("you",f"🎤 {text}")
+        try:
+            from multi_model import route_model
+            routed=route_model(text,has_image=False,available_models=self.models)
+        except:
+            routed=self.model.get()
+        threading.Thread(target=self._handle_message,
+            args=(text,routed,"",None,self.task_mode.get()),
+            daemon=True).start()
+
+    def _speak_response(self,text):
+        if not SETTINGS.get("tts_enabled",False): return
+        try:
+            from voice import speak
+            speak(text)
+        except: pass
+
+    def send_message(self):
+        user_text=self.input_box.get().strip()
+        if not user_text: return
+        self.append_chat("you",user_text); self.input_box.delete(0,"end")
+        # Only use screenshot if user explicitly asks about screen/image
+        screen_keywords = ["screen","image","picture","photo","what do you see","what's on","ocr","capture"]
+        use_screen = any(k in user_text.lower() for k in screen_keywords)
+        screenshot = self.last_screenshot if use_screen else None
+        ocr = self.last_ocr if use_screen else ""
+        try:
+            from multi_model import route_model
+            has_img = bool(use_screen and screenshot and os.path.exists(screenshot))
+            routed = route_model(user_text, has_image=has_img, available_models=self.models)
+        except:
+            routed = self.model.get()
+        threading.Thread(target=self._handle_message,args=(user_text,routed,ocr,screenshot,self.task_mode.get()),daemon=True).start()
+
+    def _handle_message(self,user_text,model,ocr,screenshot,task_mode):
+        # Check browser commands first - instant, no AI needed
+        try:
+            from browser_control import handle_browser_command
+            result = handle_browser_command(user_text)
+            if result:
+                self.after(0, lambda r=result: self.append_chat("ai", r))
+                return
+        except: pass
+        # Vision click commands
+        click_triggers = ["click the","click on","press the","find and click"]
+        t_lower = user_text.lower()
+        if any(t in t_lower for t in click_triggers):
+            def _do_vision_click():
+                try:
+                    from vision_clicker import vision_action
+                    import sys,os
+                    sys.path.insert(0,os.path.expanduser("~/vision_assistant"))
+                    result = vision_action(user_text)
+                    self.after(0, lambda r=result: self.append_chat("ai", r))
+                except Exception as e:
+                    self.after(0, lambda: self.append_chat("ai", f"Vision error: {e}"))
+            import threading
+            threading.Thread(target=_do_vision_click,daemon=True).start()
+            self.after(0, lambda: self.append_chat("system","👁 Looking at screen..."))
+            return
+        # Auto-screenshot for visual queries
+        visual_triggers = ["what do you see","what's on","what is on","look at",
+                          "can you see","describe","what's happening","screenshot",
+                          "what am i","screen","help me with this","analyze"]
+        if not screenshot and any(t in user_text.lower() for t in visual_triggers):
+            try:
+                from capture import capture_area, ocr_image
+                import tempfile, os
+                tmp = tempfile.mktemp(suffix=".png")
+                capture_area(tmp, fullscreen=True)
+                ocr = ocr_image(tmp)
+                screenshot = tmp
+                ocr_text = ocr
+                self.after(0, lambda: self.append_chat("system","📸 Captured screen."))
+            except: pass
+        def ui_callback(action_results):
+            for ok,msg in action_results:
+                self.after(0,lambda m=msg,o=ok:self.append_chat("system" if not o else "task",m))
+            if self.active_page=="calendar" and self.panel_open:
+                self.after(100,lambda:self.open_page("calendar"))
+        if task_mode:
+            task=parse_task(user_text,model)
+            action=task.get("action","chat"); expl=task.get("explanation","")
+            if action!="chat":
+                self.append_chat("task",f"{action}: {expl}")
+                ok,result=execute_task(task)
+                if action=="run_command": self.append_chat("output",result)
+                elif not ok: self.append_chat("system",f"Failed: {result}")
+                else:
+                    r=ask(f"I just did: {action} — {expl}. {user_text}",model=model,ocr_text=ocr,screenshot_path=screenshot,ui_callback=ui_callback)
+                    self.append_chat("ai",r)
+                    self._speak_response(r)
+            else:
+                r=ask(user_text,model=model,ocr_text=ocr,screenshot_path=screenshot,ui_callback=ui_callback)
+                self.append_chat("ai",r)
+                self._speak_response(r)
+        else:
+            r=ask(user_text,model=model,ocr_text=ocr,screenshot_path=screenshot,ui_callback=ui_callback)
+            self.append_chat("ai",r)
+            self._speak_response(r)
+
+    def _update_badges(self):
+        try:
+            from memory import get_goals, get_habits, get_journal_entries, habit_done_today
+            # Tasks badge - count active goals
+            goals=get_goals()
+            active=[g for g in goals if g["status"] not in ("done",)]
+            badges = getattr(self,"_nav_badges",{})
+            if "tasks" in badges:
+                n=len(active)
+                badges["tasks"].configure(text=str(n) if n else "",
+                    bg=DANGER if n else BG2)
+            habits=get_habits()
+            due=[h for h in habits if not habit_done_today(h["id"])]
+            if "habits" in badges:
+                n=len(due)
+                badges["habits"].configure(text=str(n) if n else "",
+                    bg=WARN if n else BG2)
+            import datetime
+            today=datetime.date.today()
+            entries=get_journal_entries(limit=50)
+            today_entries=[e for e in entries if datetime.date.fromtimestamp(e["timestamp"])==today]
+            if "journal" in badges:
+                n=len(today_entries)
+                badges["journal"].configure(text=str(n) if n else "",
+                    bg=ACCENT3 if n else BG2)
+        except: pass
+        self.after(30000,self._update_badges)  # refresh every 30s
+
+    def _apply_theme(self, theme_name, accent_color=None):
+        """Full UI rebuild with new theme."""
+        global SETTINGS, BG,BG2,BG3,BG4,PANEL,BORDER,TEXT,TEXT2,TEXT3,ACCENT,ACCENT2,ACCENT3,WARN,DANGER
+        SETTINGS["theme"] = theme_name
+        if accent_color:
+            SETTINGS["accent_color"] = accent_color
+        save_settings(SETTINGS)
+        _apply_color_globals(theme=theme_name, accent=accent_color)
+        # Destroy and rebuild entire UI
+        page = self.active_page
+        # Save chat history before rebuild
+        try:
+            chat_content = self.chat_text.get("1.0","end")
+        except:
+            chat_content = ""
+        for w in self.winfo_children():
+            w.destroy()
+        self.configure(bg=BG)
+        self.panel_open = False
+        self.chat_open  = False
+        self.bubble_open = False
+        self._build()
+        # Restore chat
+        if chat_content.strip():
+            self.after(400, lambda: self._restore_chat(chat_content))
+        if page:
+            self.after(200, lambda: self.open_page(page))
+        self.after(300, lambda: self.append_chat("system", f"Theme: {theme_name}"))
+
+    def _restore_chat(self, content):
+        if not hasattr(self, "chat_text"): return
+        try:
+            self.chat_text.configure(state="normal")
+            self.chat_text.delete("1.0","end")
+            self.chat_text.insert("1.0", content)
+            self.chat_text.configure(state="disabled")
+            self.chat_text.see("end")
+        except: pass
+
+    def _show_morning_briefing(self):
+        """Show morning briefing in chat on startup."""
+        try:
+            from briefing import get_morning_briefing, format_briefing_text, show_morning_briefing_notification
+            import datetime as _dt
+            # Only show between 4am and 11am
+            hour = _dt.datetime.now().hour
+            b = get_morning_briefing()
+            show_morning_briefing_notification(b)
+            briefing_text = format_briefing_text(b)
+            if not self.bubble_open:
+                self._toggle_bubble()
+            self.append_chat("system", briefing_text)
+        except Exception as e:
+            pass
+
+    def _quick_add(self):
+        """Quick add popup — dump a thought into any category instantly."""
+        win = tk.Toplevel(self)
+        win.title("Quick Add")
+        win.geometry("400x280")
+        win.configure(bg=BG2)
+        win.attributes("-topmost", True)
+        win.lift(); win.focus_force()
+
+        tk.Label(win, text="＋  QUICK ADD", bg=BG2, fg=ACCENT,
+                 font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=16, pady=(14, 8))
+
+        # Type selector
+        type_row = tk.Frame(win, bg=BG2); type_row.pack(fill="x", padx=16, pady=(0, 8))
+        type_var = tk.StringVar(value="task")
+        type_colors = {"task": ACCENT, "habit": ACCENT2, "journal": ACCENT3, "event": WARN}
+        type_btns = {}
+        for t, lbl in [("task","✓ Task"),("habit","◈ Habit"),("journal","✦ Journal"),("event","◷ Event")]:
+            b = tk.Label(type_row, text=lbl,
+                        bg=type_colors[t] if type_var.get()==t else BG3,
+                        fg=WHITE if type_var.get()==t else TEXT2,
+                        font=("Segoe UI", 9, "bold"), padx=10, pady=5, cursor="hand2")
+            b.pack(side="left", padx=2)
+            type_btns[t] = b
+            def select_type(tv=t):
+                type_var.set(tv)
+                for k, btn in type_btns.items():
+                    btn.configure(bg=type_colors[k] if k==tv else BG3,
+                                fg=WHITE if k==tv else TEXT2)
+            b.bind("<Button-1>", lambda e, s=select_type: s())
+
+        # Text input
+        tk.Label(win, text="WHAT'S ON YOUR MIND?", bg=BG2, fg=TEXT3,
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", padx=16)
+        entry = tk.Entry(win, bg=BG3, fg=TEXT, insertbackground=ACCENT,
+                        relief="flat", font=FONT_BODY,
+                        highlightthickness=1, highlightbackground=BORDER)
+        entry.pack(fill="x", padx=16, pady=(4, 8), ipady=8)
+        entry.focus_set()
+
+        def do_add():
+            text = entry.get().strip()
+            if not text: return
+            t = type_var.get()
+            import datetime as _dt
+            try:
+                if t == "task":
+                    add_goal(text, category="personal")
+                    self.append_chat("system", f"✓ Task added: {text}")
+                elif t == "habit":
+                    add_habit(text, frequency="daily")
+                    self.append_chat("system", f"◈ Habit added: {text}")
+                elif t == "journal":
+                    save_journal_entry(text, mood=3)
+                    self.append_chat("system", f"✦ Journal entry saved")
+                elif t == "event":
+                    now = _dt.datetime.now()
+                    add_calendar_event(text, now.timestamp(), now.timestamp()+3600, "", 0, ACCENT)
+                    self.append_chat("system", f"◷ Event added: {text}")
+                # Refresh active page
+                if self.active_page in ("tasks","habits","journal","calendar"):
+                    self.open_page(self.active_page)
+                win.destroy()
+            except Exception as e:
+                tk.Label(win, text=f"Error: {e}", bg=BG2, fg=DANGER,
+                        font=FONT_TINY).pack(padx=16)
+
+        entry.bind("<Return>", lambda e: do_add())
+
+        br = tk.Frame(win, bg=BG2); br.pack(fill="x", padx=16, pady=8)
+        sbtn(br, "ADD", do_add, bg=ACCENT, px=16, py=6).pack(side="right", padx=(4,0))
+        sbtn(br, "CANCEL", win.destroy, bg=BG3, fg=TEXT2, px=16, py=6).pack(side="right")
+
+        # Keyboard shortcut hints
+        tk.Label(win, text="Enter to add  ·  Tab to switch type",
+                bg=BG2, fg=TEXT3, font=("Segoe UI", 7)).pack(pady=(0,8))
+
+        # Tab cycles through types
+        types_order = ["task","habit","journal","event"]
+        def tab_cycle(e):
+            cur = type_var.get()
+            idx = (types_order.index(cur) + 1) % len(types_order)
+            next_type = types_order[idx]
+            for k, btn in type_btns.items():
+                btn.configure(bg=type_colors[k] if k==next_type else BG3,
+                            fg=WHITE if k==next_type else TEXT2)
+            type_var.set(next_type)
+        entry.bind("<Tab>", tab_cycle)
+
+    def _weekly_review(self):
+        """Generate AI weekly review and save as journal entry."""
+        self.append_chat("system","Generating weekly review...")
+        if not self.bubble_open: self._toggle_bubble()
+        def _generate():
+            try:
+                from weekly_review import generate_weekly_data, format_weekly_prompt
+                from ai import ask
+                data = generate_weekly_data()
+                prompt = format_weekly_prompt(data)
+                review = ask(prompt, model=self.model.get())
+                # Save as journal entry
+                title = f"Weekly Review — {data['week_of']} to {data['week_end']}"
+                save_journal_entry(review, title=title, mood=None)
+                self.after(0, lambda: self.append_chat("ai", f"📊 {title}\n\n{review}"))
+                if self.active_page == "journal":
+                    self.after(100, lambda: self.open_page("journal"))
+            except Exception as e:
+                self.after(0, lambda: self.append_chat("system", f"Review error: {e}"))
+        import threading
+        threading.Thread(target=_generate, daemon=True).start()
+
+    def _do_search(self, query):
+        """Universal search across all data."""
+        query = query.strip()
+        if not query or query.startswith("🔍"): return
+        try:
+            from search_local import search_all, result_count
+            results = search_all(query)
+            total = result_count(results)
+            if not results:
+                self._show_search_results(query, {})
+                return
+            self._show_search_results(query, results)
+        except Exception as e:
+            self.append_chat("system", f"Search error: {e}")
+
+    def _show_search_results(self, query, results):
+        """Show search results in side panel."""
+        if not self.panel_open: self.toggle_panel()
+        self._clear_panel()
+        self.panel_title.config(text=f"SEARCH: {query[:20]}")
+        sf, inner = scrollable(self.panel_content)
+        sf.pack(fill="both", expand=True)
+
+        from search_local import result_count
+        total = result_count(results)
+        tk.Label(inner, text=f"{total} result(s) for  \"{query}\"",
+                 bg=BG2, fg=TEXT3, font=FONT_TINY, padx=10).pack(anchor="w", pady=(8,4))
+
+        if not results:
+            tk.Label(inner, text="Nothing found.",
+                     bg=BG2, fg=TEXT3, font=FONT_SMALL, pady=20).pack()
+            return
+
+        type_config = {
+            "tasks":    ("✓ TASKS",    ACCENT,  lambda g: self._goal_card(inner, g)),
+            "habits":   ("◈ HABITS",   ACCENT2, lambda h: self._habit_search_card(inner, h)),
+            "journal":  ("✦ JOURNAL",  ACCENT3, lambda j: self._journal_search_card(inner, j)),
+            "calendar": ("◷ CALENDAR", WARN,    lambda e: self._event_search_card(inner, e)),
+        }
+        for key, (label, color, render_fn) in type_config.items():
+            if key not in results: continue
+            tk.Label(inner, text=label, bg=BG2, fg=color,
+                     font=("Segoe UI",8,"bold"), padx=10).pack(anchor="w", pady=(10,2))
+            for item in results[key][:8]:
+                render_fn(item)
+
+    def _habit_search_card(self, parent, h):
+        card = tk.Frame(parent, bg=BG3, padx=12, pady=6,
+                        highlightthickness=1, highlightbackground=BORDER)
+        card.pack(fill="x", padx=10, pady=2)
+        tk.Label(card, text=h["name"], bg=BG3, fg=TEXT,
+                 font=FONT_SMALL).pack(anchor="w")
+        tk.Label(card, text=h.get("frequency","daily").upper(), bg=BG3,
+                 fg=ACCENT2, font=FONT_TINY).pack(anchor="w")
+
+    def _journal_search_card(self, parent, j):
+        import datetime as _dt
+        card = tk.Frame(parent, bg=BG3, padx=12, pady=6,
+                        highlightthickness=1, highlightbackground=BORDER)
+        card.pack(fill="x", padx=10, pady=2)
+        dt = _dt.datetime.fromtimestamp(j["timestamp"]).strftime("%b %d %Y")
+        preview = j["content"][:80].replace("\n"," ")
+        tk.Label(card, text=dt, bg=BG3, fg=ACCENT3,
+                 font=FONT_TINY).pack(anchor="w")
+        tk.Label(card, text=preview+"…", bg=BG3, fg=TEXT2,
+                 font=FONT_SMALL, wraplength=280, justify="left").pack(anchor="w")
+
+    def _event_search_card(self, parent, ev):
+        import datetime as _dt
+        card = tk.Frame(parent, bg=BG3, padx=12, pady=6,
+                        highlightthickness=1, highlightbackground=BORDER,
+                        cursor="hand2")
+        card.pack(fill="x", padx=10, pady=2)
+        dt = _dt.datetime.fromtimestamp(ev["start_time"]).strftime("%b %d %Y %I:%M %p")
+        tk.Label(card, text=ev["title"], bg=BG3, fg=TEXT,
+                 font=FONT_SMALL).pack(anchor="w")
+        tk.Label(card, text=dt, bg=BG3, fg=WARN,
+                 font=FONT_TINY).pack(anchor="w")
+        card.bind("<Button-1>", lambda e, ed=ev: self._event_detail(ed))
+
+    # ── TOAST NOTIFICATIONS ───────────────────────────────────
+    def show_toast(self, message, color=None, duration=4000):
+        """Slide-in toast notification from top of window."""
+        if color is None: color = ACCENT
+        toast = tk.Frame(self, bg=color, padx=16, pady=10,
+                        highlightthickness=0)
+        toast.place(relx=0.5, y=-40, anchor="n")
+        tk.Label(toast, text=message, bg=color, fg=WHITE,
+                font=("Segoe UI", 10, "bold")).pack(side="left")
+        close = tk.Label(toast, text="  ✕", bg=color, fg=WHITE,
+                         cursor="hand2", font=("Segoe UI", 10))
+        close.pack(side="right")
+        close.bind("<Button-1>", lambda e: toast.destroy())
+
+        # Slide in
+        def slide_in(y=0):
+            if y < 12:
+                toast.place(relx=0.5, y=y, anchor="n")
+                self.after(16, lambda: slide_in(y + 4))
+        slide_in()
+
+        # Auto dismiss
+        def dismiss():
+            try: toast.destroy()
+            except: pass
+        self.after(duration, dismiss)
+
+    def _check_event_toasts(self):
+        """Check for upcoming events and show in-app toasts."""
+        try:
+            from briefing import check_upcoming_events as _chk
+            import time as _t, datetime as _dt
+            from memory import get_calendar_events as _gce
+            now = _t.time()
+            window = now + 16*60
+            evs = _gce(now, window)
+            for ev in evs:
+                eid = ev["id"]
+                if not hasattr(self, "_toasted_events"):
+                    self._toasted_events = set()
+                if eid not in self._toasted_events:
+                    mins = int((ev["start_time"] - now)/60)
+                    if mins <= 15:
+                        self._toasted_events.add(eid)
+                        self.after(0, lambda m=mins, t=ev["title"]:
+                            self.show_toast(f"⏰ In {m} min: {t}", color=WARN, duration=6000))
+        except: pass
+        self.after(60000, self._check_event_toasts)
+
+    # ── AI VOICE COMMANDS ─────────────────────────────────────
+    def _process_voice_command(self, text):
+        """Parse voice input for quick commands before sending to AI."""
+        t = text.lower().strip()
+        import datetime as _dt
+
+        # "add task X"
+        if t.startswith("add task "):
+            title = text[9:].strip()
+            add_goal(title, category="personal")
+            self.show_toast(f"✓ Task added: {title}", color=ACCENT)
+            if self.active_page == "tasks": self.open_page("tasks")
+            return True
+
+        # "add habit X"
+        if t.startswith("add habit "):
+            name = text[10:].strip()
+            add_habit(name, frequency="daily")
+            self.show_toast(f"◈ Habit added: {name}", color=ACCENT2)
+            if self.active_page == "habits": self.open_page("habits")
+            return True
+
+        # "log habit X" / "done habit X"
+        if t.startswith(("log habit ","done habit ","complete habit ")):
+            name = t.split("habit ",1)[1].strip()
+            from memory import get_habits as _gh, complete_habit_once as _ch
+            habits = _gh()
+            match = next((h for h in habits if name in h["name"].lower()), None)
+            if match:
+                _ch(match["id"])
+                self.show_toast(f"◈ Logged: {match['name']}", color=ACCENT3)
+                return True
+
+        # "what's on my calendar" / "today's events"
+        if any(p in t for p in ["calendar","events today","what's on","schedule"]):
+            from briefing import get_morning_briefing, format_briefing_text
+            b = get_morning_briefing()
+            self.append_chat("system", format_briefing_text(b))
+            if not self.bubble_open: self._toggle_bubble()
+            return True
+
+        # "start timer" / "pomodoro"
+        if any(p in t for p in ["start timer","pomodoro","focus timer"]):
+            self._show_pomodoro()
+            return True
+
+        return False  # not a command, send to AI
+
+    # ── POMODORO TIMER ────────────────────────────────────────
+    def _show_pomodoro(self):
+        """Floating Pomodoro timer window."""
+        if hasattr(self, "_pom_win") and self._pom_win.winfo_exists():
+            self._pom_win.lift(); return
+
+        from pomodoro import PomodoroTimer
+        win = tk.Toplevel(self)
+        win.title("Focus Timer")
+        win.geometry("240x320")
+        win.configure(bg=BG2)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        self._pom_win = win
+
+        # Header
+        tk.Label(win, text="⏱  FOCUS TIMER", bg=BG2, fg=ACCENT,
+                font=("Segoe UI", 11, "bold")).pack(pady=(14,0))
+
+        # Task link
+        tk.Label(win, text="Linked task:", bg=BG2, fg=TEXT3,
+                font=FONT_TINY).pack(pady=(8,0))
+        goals = get_goals()
+        task_var = tk.StringVar(value="None")
+        task_names = ["None"] + [g["title"][:30] for g in goals if g["status"]!="done"]
+        tk.OptionMenu(win, task_var, *task_names).pack(fill="x", padx=16)
+
+        # Timer display
+        time_lbl = tk.Label(win, text="25:00", bg=BG2, fg=TEXT,
+                           font=("Segoe UI", 42, "bold"))
+        time_lbl.pack(pady=(12,0))
+
+        mode_lbl = tk.Label(win, text="WORK", bg=BG2, fg=ACCENT2,
+                           font=("Segoe UI", 9, "bold"))
+        mode_lbl.pack()
+
+        sessions_lbl = tk.Label(win, text="Sessions: 0", bg=BG2, fg=TEXT3,
+                               font=FONT_TINY)
+        sessions_lbl.pack(pady=(4,0))
+
+        # Progress bar
+        pb = tk.Canvas(win, bg=BG3, height=6, highlightthickness=0)
+        pb.pack(fill="x", padx=16, pady=8)
+
+        def update_pb(progress):
+            pb.delete("all")
+            w = pb.winfo_width()
+            if w > 0:
+                pb.create_rectangle(0,0,int(w*progress),6,fill=ACCENT,outline="")
+
+        pom = PomodoroTimer(
+            on_tick=lambda s,m: (
+                win.after(0, lambda: time_lbl.config(text=pom.fmt_time())),
+                win.after(0, lambda: update_pb(pom.progress))
+            ),
+            on_complete=lambda mode,sess: (
+                win.after(0, lambda: mode_lbl.config(
+                    text="BREAK" if mode=="break" else "WORK",
+                    fg=ACCENT3 if mode=="break" else ACCENT2)),
+                win.after(0, lambda: sessions_lbl.config(text=f"Sessions: {sess}")),
+                win.after(0, lambda: self.show_toast(
+                    f"🍅 Session done! Time for a {'break' if mode=='break' else 'focus session'}",
+                    color=ACCENT3 if mode=="break" else ACCENT))
+            )
+        )
+
+        # Controls
+        ctrl = tk.Frame(win, bg=BG2); ctrl.pack(pady=8)
+        start_btn = tk.Label(ctrl, text="▶ Start", bg=ACCENT, fg=WHITE,
+                            font=("Segoe UI",10,"bold"), padx=12, pady=6, cursor="hand2")
+        start_btn.pack(side="left", padx=4)
+
+        def toggle_start():
+            if not pom._running:
+                pom.start()
+                start_btn.configure(text="⏸ Pause", bg=WARN)
+            elif pom._paused:
+                pom.pause()
+                start_btn.configure(text="⏸ Pause", bg=WARN)
+            else:
+                pom.pause()
+                start_btn.configure(text="▶ Resume", bg=ACCENT)
+        start_btn.bind("<Button-1>", lambda e: toggle_start())
+
+        skip_btn = tk.Label(ctrl, text="⏭ Skip", bg=BG3, fg=TEXT2,
+                           font=("Segoe UI",10,"bold"), padx=12, pady=6, cursor="hand2")
+        skip_btn.pack(side="left", padx=4)
+        skip_btn.bind("<Button-1>", lambda e: pom.skip())
+
+        stop_btn = tk.Label(ctrl, text="■ Stop", bg=DANGER, fg=WHITE,
+                           font=("Segoe UI",10,"bold"), padx=12, pady=6, cursor="hand2")
+        stop_btn.pack(side="left", padx=4)
+        def do_stop():
+            pom.stop()
+            time_lbl.configure(text="25:00")
+            mode_lbl.configure(text="WORK", fg=ACCENT2)
+            start_btn.configure(text="▶ Start", bg=ACCENT)
+            pb.delete("all")
+        stop_btn.bind("<Button-1>", lambda e: do_stop())
+
+        # Settings
+        cfg = tk.Frame(win, bg=BG2); cfg.pack(fill="x", padx=16, pady=(4,12))
+        tk.Label(cfg, text="Work:", bg=BG2, fg=TEXT3, font=FONT_TINY).pack(side="left")
+        work_spin = tk.Spinbox(cfg,from_=1,to=60,width=3,bg=BG3,fg=TEXT,
+                               relief="flat",font=FONT_TINY,
+                               command=lambda: setattr(pom,"work_mins",int(work_spin.get())))
+        work_spin.delete(0,"end"); work_spin.insert(0,"25")
+        work_spin.pack(side="left",padx=2)
+        tk.Label(cfg,text="Break:",bg=BG2,fg=TEXT3,font=FONT_TINY).pack(side="left",padx=(8,0))
+        break_spin = tk.Spinbox(cfg,from_=1,to=30,width=3,bg=BG3,fg=TEXT,
+                                relief="flat",font=FONT_TINY,
+                                command=lambda: setattr(pom,"break_mins",int(break_spin.get())))
+        break_spin.delete(0,"end"); break_spin.insert(0,"5")
+        break_spin.pack(side="left",padx=2)
+
+        win.protocol("WM_DELETE_WINDOW", lambda: (pom.stop(), win.destroy()))
+
+    # ── SMART SUGGESTIONS ────────────────────────────────────
+    def _check_smart_suggestions(self):
+        """Analyze patterns and show smart suggestions."""
+        try:
+            import datetime as _dt, time as _t
+            from memory import get_habits, get_db as _mgdb
+            today = _dt.date.today()
+            conn = _mgdb()
+
+            suggestions = []
+
+            # Habits not logged in 2+ days
+            habits = get_habits()
+            for h in habits:
+                last = conn.execute(
+                    "SELECT MAX(date_str) FROM habit_completions WHERE habit_id=?",
+                    (h["id"],)
+                ).fetchone()[0]
+                if last:
+                    last_date = _dt.date.fromisoformat(last)
+                    gap = (today - last_date).days
+                    if gap >= 2:
+                        suggestions.append(f"◈ '{h['name']}' hasn't been logged in {gap} days")
+
+            # Overdue tasks
+            goals = get_goals()
+            now_ts = _t.time()
+            overdue = [g for g in goals if g.get("due_date") and
+                      g["due_date"] < now_ts and g["status"] != "done"]
+            if overdue:
+                suggestions.append(f"⚠ {len(overdue)} task(s) are overdue")
+
+            # No journal entry today
+            today_entries = conn.execute(
+                "SELECT COUNT(*) FROM journal WHERE date(timestamp,'unixepoch')=?",
+                (today.isoformat(),)
+            ).fetchone()[0]
+            if today_entries == 0 and _dt.datetime.now().hour >= 20:
+                suggestions.append("✦ You haven't written a journal entry today")
+
+            conn.close()
+
+            if suggestions and not getattr(self,"_suggestions_shown_today",False):
+                self._suggestions_shown_today = True
+                msg = "💡 Suggestions:\n" + "\n".join(f"  {s}" for s in suggestions[:3])
+                self.after(0, lambda: self.show_toast(msg, color=BG3, duration=8000))
+
+        except: pass
+        self.after(3600000, self._check_smart_suggestions)  # hourly
+
+    # ── ECHO BRIDGE CONFIG ────────────────────────────────────
+    def _echo_bridge_status(self):
+        """Check Echo bridge connection status."""
+        import os
+        echo_db = os.path.expanduser("~/vision_assistant/echo_bridge.json")
+        if os.path.exists(echo_db):
+            with open(echo_db) as f:
+                import json
+                cfg = json.load(f)
+            return cfg
+        return None
+
+    def _habit_card(self,parent,h,done,count,target,streak):
+        bg=BG4 if done else BG3
+        card=tk.Frame(parent,bg=bg,padx=10,pady=6,
+                     highlightthickness=1,
+                     highlightbackground=ACCENT2 if done else BORDER)
+        card.pack(fill="x",padx=10,pady=2)
+        # Title + streak
+        r1=tk.Frame(card,bg=bg); r1.pack(fill="x")
+        name=h["name"]
+        streak_txt=f" 🔥{streak}" if streak>=3 else (f" ·{streak}d" if streak>0 else "")
+        tk.Label(r1,text=name+streak_txt,bg=bg,
+                fg=TEXT3 if done else TEXT,font=FONT_SMALL,anchor="w").pack(side="left",fill="x",expand=True)
+        tk.Label(r1,text=f"{count}/{target}",bg=bg,fg=TEXT3,
+                font=("Segoe UI",8)).pack(side="right")
+        # Progress bar
+        pb=tk.Frame(card,bg=BG2 if done else BG4,height=3)
+        pb.pack(fill="x",pady=(3,0))
+        if count>0:
+            tk.Frame(pb,bg=ACCENT2,height=3).place(x=0,y=0,
+                relwidth=min(1,count/target),relheight=1)
+        # Log button
+        if not done:
+            sbtn(card,"+ Log",lambda hid=h["id"]:self._log_habit(hid),
+                bg=ACCENT2,fg=BG,px=10,py=2).pack(anchor="w",pady=(4,0))
+
+    def _log_habit(self,hid):
+        from memory import complete_habit_once as _ch
+        _ch(hid); self._page_dirty['habits']=True; self.open_page('habits')
+
+def purge_old_habits():
+    import sqlite3
+    from config import DB_PATH
+    cutoff=time.time()-86400
+    conn=sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM habit_completions WHERE timestamp < ?",(cutoff,))
+    conn.commit(); conn.close()
+
+

@@ -1,0 +1,252 @@
+"""
+text_selector.py — Full-screen OCR text selector for Echo Desktop.
+
+Draws a translucent fullscreen overlay, lets you drag-select any region,
+OCRs it, then shows a result popup with:
+  - Copyable text field
+  - "Copy" button
+  - "Ask Echo" button (sends to running Echo instance via IPC)
+
+Launch via hotkey (add to xbindkeys):
+  /home/jesus999l/vision_env/bin/python3 /home/jesus999l/vision_assistant/text_selector.py
+
+Can also be imported and called:
+  from text_selector import run_text_selector
+  run_text_selector()
+"""
+import tkinter as tk
+from tkinter import scrolledtext
+import subprocess, os, sys, tempfile, threading, json, socket
+
+sys.path.insert(0, os.path.expanduser("~/vision_assistant"))
+from config import IPC_HOST, IPC_PORT, IPC_MAGIC
+
+# ── THEME ─────────────────────────────────────────────────────────────────────
+BG       = "#1a1a2e"
+BG2      = "#16213e"
+ACCENT   = "#7c6af7"
+ACCENT2  = "#a89cf7"
+TEXT     = "#e8e8f0"
+TEXT2    = "#9090a8"
+BORDER   = "#2e2e4e"
+SUCCESS  = "#4caf8a"
+
+# ── SCREENSHOT HELPER ─────────────────────────────────────────────────────────
+def _scrot_region(x1, y1, x2, y2):
+    """Capture a screen region to a temp file using scrot or import."""
+    x, y = min(x1, x2), min(y1, y2)
+    w, h = abs(x2 - x1), abs(y2 - y1)
+    if w < 4 or h < 4:
+        return None
+    tmp = tempfile.mktemp(prefix="vision_sel_", suffix=".png")
+    # Try scrot first (fast), fallback to import (ImageMagick)
+    r = subprocess.run(
+        ["scrot", "-a", f"{x},{y},{w},{h}", tmp],
+        capture_output=True
+    )
+    if r.returncode != 0 or not os.path.exists(tmp):
+        r2 = subprocess.run(
+            ["import", "-window", "root", "-crop", f"{w}x{h}+{x}+{y}", tmp],
+            capture_output=True
+        )
+        if r2.returncode != 0 or not os.path.exists(tmp):
+            return None
+    return tmp
+
+def _ocr(image_path):
+    try:
+        import pytesseract
+        from PIL import Image
+        return pytesseract.image_to_string(Image.open(image_path)).strip()
+    except Exception as e:
+        return f"[OCR error: {e}]"
+
+def _send_to_echo(screenshot_path, ocr_text):
+    try:
+        payload = json.dumps({
+            "magic": IPC_MAGIC,
+            "screenshot": screenshot_path,
+            "ocr": ocr_text,
+        }).encode()
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect((IPC_HOST, IPC_PORT))
+        s.sendall(payload)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+# ── RESULT POPUP ──────────────────────────────────────────────────────────────
+class ResultPopup(tk.Toplevel):
+    def __init__(self, master, ocr_text, screenshot_path):
+        super().__init__(master)
+        self.ocr_text = ocr_text
+        self.screenshot_path = screenshot_path
+
+        self.title("Echo — Selected Text")
+        self.geometry("520x340")
+        self.configure(bg=BG2)
+        self.resizable(True, True)
+        self.attributes("-topmost", True)
+        self.lift()
+        self.focus_force()
+
+        self._build()
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _build(self):
+        # Header
+        hdr = tk.Frame(self, bg=BG2)
+        hdr.pack(fill="x", padx=16, pady=(12, 4))
+        tk.Label(hdr, text="◈  Selected Text", bg=BG2, fg=ACCENT2,
+                 font=("Segoe UI", 10, "bold")).pack(side="left")
+        tk.Button(hdr, text="✕", bg=BG2, fg=TEXT2, relief="flat",
+                  font=("Segoe UI", 10), cursor="hand2",
+                  command=self.destroy).pack(side="right")
+
+        # Text area (selectable + copyable)
+        self.txt = scrolledtext.ScrolledText(
+            self, wrap="word", bg=BG, fg=TEXT, insertbackground=ACCENT,
+            relief="flat", font=("Segoe UI", 10), padx=10, pady=8,
+            highlightthickness=1, highlightbackground=BORDER
+        )
+        self.txt.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        self.txt.insert("1.0", self.ocr_text if self.ocr_text else "(No text detected)")
+        self.txt.configure(state="normal")  # keep selectable
+
+        # Buttons
+        btn_row = tk.Frame(self, bg=BG2)
+        btn_row.pack(fill="x", padx=16, pady=(0, 14))
+
+        tk.Button(
+            btn_row, text="⎘  Copy All", bg=ACCENT, fg="white",
+            relief="flat", font=("Segoe UI", 9, "bold"), cursor="hand2",
+            padx=14, pady=6, command=self._copy
+        ).pack(side="left", padx=(0, 8))
+
+        tk.Button(
+            btn_row, text="◎  Ask Echo", bg=BG, fg=ACCENT2,
+            relief="flat", font=("Segoe UI", 9, "bold"), cursor="hand2",
+            padx=14, pady=6,
+            highlightthickness=1, highlightbackground=ACCENT,
+            command=self._ask_echo
+        ).pack(side="left", padx=(0, 8))
+
+        self.status_lbl = tk.Label(btn_row, text="", bg=BG2, fg=SUCCESS,
+                                   font=("Segoe UI", 9))
+        self.status_lbl.pack(side="left", padx=8)
+
+        tk.Button(
+            btn_row, text="New Selection", bg=BG2, fg=TEXT2,
+            relief="flat", font=("Segoe UI", 9), cursor="hand2",
+            padx=10, pady=6, command=self._new_selection
+        ).pack(side="right")
+
+    def _copy(self):
+        text = self.txt.get("1.0", "end-1c")
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update()
+        self.status_lbl.config(text="✓ Copied")
+        self.after(2000, lambda: self.status_lbl.config(text=""))
+
+    def _ask_echo(self):
+        sent = _send_to_echo(self.screenshot_path or "", self.ocr_text)
+        if sent:
+            self.status_lbl.config(text="✓ Sent to Echo")
+        else:
+            # Echo not running — launch it with this capture
+            self.status_lbl.config(text="Starting Echo...")
+            subprocess.Popen([
+                "/home/jesus999l/vision_env/bin/python3",
+                "/home/jesus999l/vision_assistant/main.py",
+                "--ui"
+            ])
+            self.after(1500, lambda: _send_to_echo(self.screenshot_path or "", self.ocr_text))
+        self.after(2000, lambda: self.status_lbl.config(text=""))
+
+    def _new_selection(self):
+        self.destroy()
+        # Re-run selector after a short delay so this window closes first
+        self.master.after(200, lambda: _start_selector(self.master))
+
+
+# ── FULLSCREEN SELECTION OVERLAY ──────────────────────────────────────────────
+class SelectionOverlay(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.master = master
+
+        # Fullscreen transparent overlay
+        self.attributes("-fullscreen", True)
+        self.attributes("-alpha", 0.35)
+        self.attributes("-topmost", True)
+        self.configure(bg="black", cursor="crosshair")
+        self.overrideredirect(True)
+
+        self._start_x = self._start_y = 0
+        self._rect = None
+
+        self.canvas = tk.Canvas(self, bg="black", highlightthickness=0,
+                                cursor="crosshair")
+        self.canvas.pack(fill="both", expand=True)
+
+        # Instruction label
+        self.canvas.create_text(
+            self.winfo_screenwidth() // 2,
+            self.winfo_screenheight() // 2,
+            text="Drag to select text region  ·  Esc to cancel",
+            fill="#ffffff", font=("Segoe UI", 16),
+            tags="hint"
+        )
+
+        self.canvas.bind("<ButtonPress-1>",   self._on_press)
+        self.canvas.bind("<B1-Motion>",       self._on_drag)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.focus_force()
+
+    def _on_press(self, e):
+        self._start_x, self._start_y = e.x, e.y
+        self.canvas.delete("hint")
+        if self._rect:
+            self.canvas.delete(self._rect)
+
+    def _on_drag(self, e):
+        if self._rect:
+            self.canvas.delete(self._rect)
+        self._rect = self.canvas.create_rectangle(
+            self._start_x, self._start_y, e.x, e.y,
+            outline=ACCENT, width=2, fill=ACCENT2,
+            stipple="gray25", tags="sel"
+        )
+
+    def _on_release(self, e):
+        x1, y1 = self._start_x, self._start_y
+        x2, y2 = e.x, e.y
+        self.destroy()
+
+        # Run OCR in background so UI stays responsive
+        def _process():
+            img = _scrot_region(x1, y1, x2, y2)
+            text = _ocr(img) if img else ""
+            self.master.after(0, lambda: ResultPopup(self.master, text, img))
+
+        threading.Thread(target=_process, daemon=True).start()
+
+
+# ── ENTRY ─────────────────────────────────────────────────────────────────────
+def _start_selector(root):
+    SelectionOverlay(root)
+
+def run_text_selector():
+    """Main entry point — can be called from another module."""
+    root = tk.Tk()
+    root.withdraw()
+    root.update_idletasks()
+    root.after(200, lambda: _start_selector(root))
+    root.mainloop()
+
+if __name__ == "__main__":
+    run_text_selector()

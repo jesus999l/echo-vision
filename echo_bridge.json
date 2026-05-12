@@ -1,0 +1,6 @@
+{
+  "echo_path": "~/echo",
+  "shared_db": "/home/jesus999l/vision_assistant/memory.db",
+  "shared_vosk": "/home/jesus999l/vosk-model-small-en-us-0.15",
+  "shared_piper": "/home/jesus999l/piper"
+}

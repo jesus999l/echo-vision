@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "promotion_threshold": 1.5,
+  "dwell_threshold_sec": 45,
+  "max_discard_vol": 5000,
+  "decay_window_hours": 48,
+  "backlog_warn": 100,
+  "backlog_slow": 500,
+  "backlog_pause": 1000,
+  "priority_thresholds": {
+    "text_selection": 8,
+    "page_load": 6,
+    "tab_change": 5,
+    "tab_close": 3,
+    "scroll": 1,
+    "focus_change": 1,
+    "mousemove": 0
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "habit_history": {
+    "read for 30 mine": [
+      "2026-03-01"
+    ],
+    "drink more water": [
+      "2026-03-01",
+      "2026-03-02",
+      "2026-03-03"
+    ],
+    "meditat": [
+      "2026-03-01"
+    ],
+    "sleep": [
+      "2026-03-02"
+    ],
+    "to drink five glasses of water.": [
+      "2026-03-08"
+    ],
+    "to meditate every": [
+      "2026-03-08"
+    ],
+    "drink water three times a day": [
+      "2026-03-12"
+    ],
+    "drink water": [
+      "2026-03-15"
+    ]
+  },
+  "goal_history": [],
+  "mood_trend": [
+    4
+  ],
+  "focus_areas": [
+    "personal",
+    "task"
+  ],
+  "personality_notes": []
+}

@@ -1,0 +1,104 @@
+import tkinter as tk
+import threading
+import socket
+import json
+import sys
+import os
+sys.path.insert(0, os.path.expanduser("~/vision_assistant"))
+
+from config import IPC_HOST, IPC_PORT, IPC_MAGIC
+from capture import capture_area, ocr_image, cleanup_stale_processes
+from search import reverse_image_search
+from ui import ChatOverlay
+
+
+def send_to_running_instance(screenshot_path, ocr_text):
+    try:
+        payload = json.dumps({
+            "magic": IPC_MAGIC,
+            "screenshot": screenshot_path,
+            "ocr": ocr_text
+        }).encode()
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2)
+        s.connect((IPC_HOST, IPC_PORT))
+        s.sendall(payload)
+        s.close()
+        return True
+    except (ConnectionRefusedError, OSError):
+        return False
+
+
+def start_ipc_server(app):
+    def listen():
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind((IPC_HOST, IPC_PORT))
+        server.listen(5)
+        server.settimeout(1)
+        while True:
+            try:
+                conn, _ = server.accept()
+                data = b""
+                while True:
+                    chunk = conn.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                conn.close()
+                msg = json.loads(data.decode())
+                if msg.get("magic") == IPC_MAGIC:
+                    app.root.after(0, lambda m=msg: app.handle_capture(m["screenshot"], m["ocr"]))
+            except socket.timeout:
+                continue
+            except Exception as e:
+                print(f"IPC error: {e}")
+    threading.Thread(target=listen, daemon=True).start()
+
+
+class VisionApp:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.chat_window = None
+
+    def handle_capture(self, screenshot_path, ocr_text):
+        threading.Thread(
+            target=reverse_image_search,
+            args=(screenshot_path, ocr_text),
+            daemon=True
+        ).start()
+
+        if self.chat_window is None or not self.chat_window.winfo_exists():
+            self.chat_window = ChatOverlay(self.root)
+        else:
+            self.chat_window.lift()
+            self.chat_window.focus_force()
+
+        self.chat_window.set_capture(screenshot_path, ocr_text)
+        self.root.after(500, self.chat_window.append_divider)
+        self.chat_window.display_image(screenshot_path)
+
+        if ocr_text.strip():
+            self.chat_window.append_chat("OCR", ocr_text.strip())
+        else:
+            self.chat_window.append_chat("System", "No text detected.")
+
+    def run(self):
+        cleanup_stale_processes()
+        screenshot_path = capture_area()
+        if not screenshot_path:
+            print("Screenshot failed or cancelled.")
+            return
+        ocr_text = ocr_image(screenshot_path)
+        if send_to_running_instance(screenshot_path, ocr_text):
+            print("Sent to existing instance.")
+            return
+        start_ipc_server(self)
+        self.handle_capture(screenshot_path, ocr_text)
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    app = VisionApp()
+    app.run()

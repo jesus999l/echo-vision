@@ -1,0 +1,10 @@
+{
+  "backend_order": ["ddg_instant", "ddg_html"],
+  "searxng_url": "",
+  "timeout_seconds": 7,
+  "rate_limit_seconds": 1.5,
+  "cache_max_size": 64,
+  "cache_ttl_seconds": 300,
+  "max_results_in_prompt": 5,
+  "auto_search_in_pipeline": true
+}
