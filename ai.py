@@ -31,6 +31,18 @@ def fetch_available_models():
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 _personality_cache = {"ctx": "", "ts": 0.0}
 
+# ── INTEGRATION SINGLETONS (set by main.py at startup) ──────────────────────
+_obsidian_bridge = None   # ObsidianBridge instance
+_web_searcher    = None   # WebSearch instance
+
+def set_obsidian_bridge(bridge):
+    global _obsidian_bridge
+    _obsidian_bridge = bridge
+
+def set_web_searcher(searcher):
+    global _web_searcher
+    _web_searcher = searcher
+
 def build_system_prompt():
     import time
     if time.time() - _personality_cache["ts"] > 300:
@@ -96,7 +108,22 @@ Action types: move_event, edit_event, delete_event, add_event,
 complete_goal, delete_goal, add_goal,
 complete_habit, add_habit, delete_habit, add_journal
 
-Only add <action> when actually changing data."""
+Only add <action> when actually changing data.""" + _vault_context_block()
+
+def _vault_context_block() -> str:
+    """Return Obsidian vault context string for prompt injection, or ''."""
+    if _obsidian_bridge is None:
+        return ""
+    try:
+        # Use last user message from recent history as query if available
+        recent = get_recent_messages(limit=1)
+        query  = recent[-1]["content"] if recent else ""
+        ctx    = _obsidian_bridge.get_context_for_query(query, max_chars=1200)
+        if ctx:
+            return f"\n\nOBSIDIAN VAULT CONTEXT:\n{ctx}"
+    except Exception as e:
+        pass
+    return ""
 
 # ── CONTEXT ───────────────────────────────────────────────────────────────────
     if _guidelines:
@@ -260,10 +287,23 @@ def _ask_vision(prompt, model, screenshot_path):
 def _ask_text(prompt, model, ocr_text="", screenshot_path=""):
     context     = build_context(ocr_text, screenshot_path)
     full_prompt = f"{context}\n\n{prompt}" if context else prompt
+    # ── Web search injection ────────────────────────────────────────────────
+    sys_prompt = build_system_prompt()
+    try:
+        if _web_searcher is not None:
+            from web_search import needs_web_search
+            if needs_web_search(prompt):
+                result = _web_searcher.search(prompt)
+                web_ctx = result.to_prompt_block(max_results=4)
+                if web_ctx:
+                    sys_prompt += f"\n\nWEB SEARCH RESULTS:\n{web_ctx}"
+    except Exception:
+        pass
+    # ── end web search ───────────────────────────────────────────────────────
     r = requests.post(LLM_URL,
                       json={"model": model,
                             "messages": [
-                                {"role": "system", "content": build_system_prompt()},
+                                {"role": "system", "content": sys_prompt},
                                 {"role": "user",   "content": full_prompt},
                             ],
                             "max_tokens": 300},
