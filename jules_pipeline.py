@@ -227,8 +227,8 @@ class GitHubClient:
     def validate_token(self) -> bool:
         """Return True if the token has repo access."""
         try:
-            data = self._get("")   # GET /repos/owner/repo
-            return "id" in data
+            r = self._session.get(f"{GITHUB_API}/repos/{self.repo}", timeout=10)
+            return r.status_code == 200
         except Exception as e:
             logger.error(f"GitHub token validation failed: {e}")
             return False
