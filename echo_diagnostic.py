@@ -109,21 +109,34 @@ for fname, label in modules:
     path = os.path.join(VA, fname)
     check(label, os.path.exists(path), fname)
 
-# ── 5. HOTKEYS ────────────────────────────────────────────────────────────────
+# ── 5. HYPERSPACE ─────────────────────────────────────────────────────────────
+print("\n[ Hyperspace Agent Network ]")
+r = run("hyperspace status")
+hyperspace_installed = r.returncode == 0 or bool(shutil.which("hyperspace"))
+check("Hyperspace installed", hyperspace_installed)
+if hyperspace_installed:
+    check("Hyperspace status", "Status: RUNNING" in r.stdout,
+          r.stdout.split("\n")[0] if r.stdout else "not responding")
+
+# ── 6. HYPERSPACE (above) ─────────────────────────────────────────────────────
+# ── 7. HOTKEYS ────────────────────────────────────────────────────────────────
 print("\n[ Hotkeys ]")
-xbkeys = open(os.path.expanduser("~/.xbindkeysrc")).read()
-hotkeys = [
-    ("control+alt+x", "Text Selector (Ctrl+Alt+X)"),
-    ("control+alt+g", "Gaming Mode (Ctrl+Alt+G)"),
-    ("control+alt+s", "Open Echo (Ctrl+Alt+S)"),
-]
-for key, label in hotkeys:
-    check(label, key in xbkeys.lower())
+try:
+    xbkeys = open(os.path.expanduser("~/.xbindkeysrc")).read()
+    hotkeys = [
+        ("control+alt+x", "Text Selector (Ctrl+Alt+X)"),
+        ("control+alt+g", "Gaming Mode (Ctrl+Alt+G)"),
+        ("control+alt+s", "Open Echo (Ctrl+Alt+S)"),
+    ]
+    for key, label in hotkeys:
+        check(label, key in xbkeys.lower())
+except:
+    check("xbindkeysrc", False, "file missing")
 
 r = run("pgrep xbindkeys")
 check("xbindkeys running", bool(r.stdout.strip()))
 
-# ── 6. AUTOSTART ──────────────────────────────────────────────────────────────
+# ── 8. AUTOSTART ──────────────────────────────────────────────────────────────
 print("\n[ Autostart ]")
 autostart = os.path.expanduser("~/.config/autostart/echo-desktop.desktop")
 if os.path.exists(autostart):
@@ -140,7 +153,7 @@ r = run("systemctl is-enabled boinc-client 2>/dev/null")
 check("BOINC autostart disabled", "disabled" in r.stdout or r.returncode != 0,
       r.stdout.strip() or "not found")
 
-# ── 7. DISK & SYSTEM ──────────────────────────────────────────────────────────
+# ── 9. DISK & SYSTEM ──────────────────────────────────────────────────────────
 print("\n[ System Resources ]")
 disk = shutil.disk_usage("/")
 free_gb = disk.free / 1024**3
@@ -160,7 +173,7 @@ r = run("top -bn1 | grep 'Cpu(s)' | awk '{print $2+$4}'")
 cpu = float(r.stdout.strip() or "0")
 check("CPU usage", cpu < 80, f"{cpu:.0f}%", warn=cpu > 50)
 
-# ── 8. GAME SESSIONS ──────────────────────────────────────────────────────────
+# ── 10. GAME SESSIONS ──────────────────────────────────────────────────────────
 print("\n[ Warframe & Gaming ]")
 sessions_dir = os.path.expanduser("~/echo_game_sessions")
 if os.path.exists(sessions_dir):
@@ -173,7 +186,7 @@ else:
 kb = os.path.expanduser("~/echo_warframe/warframe_parsed_kb.json")
 check("Warframe KB", os.path.exists(kb), "1.4MB KB found" if os.path.exists(kb) else "missing")
 
-# ── 9. SCHEDULED TASKS ───────────────────────────────────────────────────────
+# ── 11. SCHEDULED TASKS ───────────────────────────────────────────────────────
 print("\n[ Scheduled Tasks ]")
 r = run("crontab -l 2>/dev/null")
 cron = r.stdout

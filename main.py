@@ -139,6 +139,17 @@ class VisionApp:
             self.searcher = None
             print(f"[main] Web search failed: {e}")
 
+        # ── Hyperspace bridge ────────────────────────────────────────────────
+        try:
+            from hyperspace_bridge import HyperspaceBridge
+            self.hyperspace = HyperspaceBridge()
+            import ai as _ai
+            _ai.set_hyperspace_bridge(self.hyperspace)
+            print("[main] Hyperspace bridge ready.")
+        except Exception as e:
+            self.hyperspace = None
+            print(f"[main] Hyperspace bridge failed: {e}")
+
         # ── Jules pipeline ───────────────────────────────────────────────────
         try:
             from jules_pipeline import build_jules_pipeline
@@ -178,6 +189,11 @@ class VisionApp:
                 self._speak_if_ready(f"New task imported from Obsidian: {note.title}")
             if note.has_tag("jules-task"):
                 self._speak_if_ready(f"Jules task queued: {note.title}")
+
+            # Also index into Hyperspace if available
+            if self.hyperspace and self.hyperspace.is_available():
+                self.hyperspace.index_file(str(note.path))
+
         except Exception as e:
             print(f"[main] vault callback error: {e}")
 
