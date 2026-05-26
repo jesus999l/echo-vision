@@ -313,12 +313,16 @@ def _ask_text(prompt, model, ocr_text="", screenshot_path=""):
 # ── TASK EXECUTION ────────────────────────────────────────────────────────────
 _TASK_SYSTEM = """You are a desktop task automation assistant.
 Respond ONLY with a JSON object:
-{"action": "open_app|web_search|run_command|open_file|type_text|chat", "params": {}, "explanation": ""}
+{"action": "open_app|web_search|run_command|open_file|type_text|tidy|play_media|stop_media|pentest|chat", "params": {}, "explanation": ""}
 - open_app:    {"name": "firefox"}
 - web_search:  {"query": "..."}
 - run_command: {"command": "..."}
 - open_file:   {"path": "..."}
 - type_text:   {"text": "..."}
+- tidy:        {"dir": "~/Downloads"}
+- play_media:  {"path": "/path/to/file"}
+- stop_media:  {}
+- pentest:     {"url": "http://localhost:3000", "repo": "/path/to/repo"}
 - chat:        {} — no desktop action needed"""
 
 _BLOCKED_CMDS = ["rm -rf", "mkfs", "dd if=", ":(){ :|:& };:", "> /dev/"]
@@ -367,6 +371,26 @@ def execute_task(task):
             subprocess.run(["xdotool", "type", "--clearmodifiers",
                             "--delay", "20", params["text"]])
             return True, "Typed text"
+        elif action == "tidy":
+            from tidy_agent import tidy_directory
+            res = tidy_directory(params.get("dir", "~/Downloads"))
+            return True, res
+        elif action == "play_media":
+            from usb_player import play_media
+            res = play_media(params.get("path", ""))
+            return True, res
+        elif action == "stop_media":
+            from usb_player import stop_media
+            res = stop_media()
+            return True, res
+        elif action == "pentest":
+            url = params.get("url")
+            repo = params.get("repo")
+            if not url or not repo:
+                return False, "Missing url or repo for pentest"
+            cmd = f"npx @keygraph/shannon start -u {url} -r {repo}"
+            subprocess.Popen(cmd, shell=True)
+            return True, f"Started security pentest: {url}"
         elif action == "chat":
             return True, task.get("explanation", "")
         return False, f"Unknown: {action}"
