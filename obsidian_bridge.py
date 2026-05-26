@@ -66,6 +66,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "conversations": "Echo/Conversations",
         "security":      "Echo/Security",
         "status":        "Echo/Status",
+        "learning":      "Echo/Learning",
     },
 
     # Folders to watch for incoming notes (empty = watch entire vault)
@@ -335,6 +336,23 @@ class VaultWriter:
             f"{summary_text.strip()}\n"
             f"{tasks_md}"
             f"{habits_md}"
+        )
+        self._write(path, content)
+        return path
+
+    def write_learning_summary(self, summary_text: str) -> Path:
+        today = self._today()
+        ts    = datetime.now().strftime("%H%M%S")
+        path  = self._folder("learning") / f"learning-{today}-{ts}.md"
+        content = (
+            f"---\n"
+            f"title: \"Reflective Learning — {today}\"\n"
+            f"date: {today}\n"
+            f"tags: [echo-learning, echo-generated]\n"
+            f"---\n\n"
+            f"# Reflective Learning — {today}\n"
+            f"*Generated {self._now_stamp()}*\n\n"
+            f"{summary_text.strip()}\n"
         )
         self._write(path, content)
         return path
@@ -987,6 +1005,10 @@ class ObsidianBridge:
     def log_status_snapshot(self, data: Dict[str, Any]) -> Optional[Path]:
         if self._write_ok():
             return self.writer.write_status_snapshot(data)
+
+    def log_learning_summary(self, summary_text: str) -> Optional[Path]:
+        if self._write_ok():
+            return self.writer.write_learning_summary(summary_text)
 
     # -----------------------------------------------------------------------
     # Introspection

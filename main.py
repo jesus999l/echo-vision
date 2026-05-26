@@ -201,6 +201,15 @@ class VisionApp:
 
     def _on_closing(self):
         """Graceful shutdown — stop background threads before destroying root."""
+        # ── Learning Reflection ──────────────────────────────────────────────
+        try:
+            if self.obsidian:
+                from personality import generate_reflective_summary
+                summary = generate_reflective_summary()
+                self.obsidian.log_learning_summary(summary)
+        except Exception as e:
+            print(f"[main] learning log error: {e}")
+
         try:
             if self.obsidian:
                 self.obsidian.stop()

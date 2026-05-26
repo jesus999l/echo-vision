@@ -87,6 +87,13 @@ THEMES = {
         "ACCENT2":"#00bcd4","ACCENT3":"#69f0ae",
         "WARN":"#ffab40","DANGER":"#ff5252",
     },
+    "echo_os": {
+        "BG":"#050505","BG2":"#0d0d0d","BG3":"#1a1a1a","BG4":"#262626",
+        "PANEL":"#000000","BORDER":"#A855F7",
+        "TEXT":"#FFFFFF","TEXT2":"#06B6D4","TEXT3":"#9CA3AF",
+        "ACCENT2":"#EC4899","ACCENT3":"#84CC16",
+        "WARN":"#FCD34D","DANGER":"#FB923C",
+    },
     "light": {
         "BG":"#f5f5f7","BG2":"#ffffff","BG3":"#efefef","BG4":"#e5e5ed",
         "PANEL":"#dddde8","BORDER":"#ccccdd",
@@ -402,6 +409,7 @@ class ChatOverlay(tk.Toplevel):
             ("◈","Habits","habits",ACCENT2),
             ("✦","Journal","journal",ACCENT3),
             ("◷","Calendar","calendar",WARN),
+            ("📡","System","manifest",ACCENT2),
             None,
             ("＋","Quick Add",None,ACCENT3),
             ("⏱","Focus Timer",None,WARN),
@@ -790,6 +798,7 @@ class ChatOverlay(tk.Toplevel):
             "habits":   self._page_habits,
             "journal":  self._page_journal,
             "settings": self._page_settings,
+            "manifest": self._page_manifest,
         }
         if page in pages:
             try:
@@ -825,6 +834,92 @@ class ChatOverlay(tk.Toplevel):
 
     # ── SETTINGS ─────────────────────────────────────────────
 
+    def _page_manifest(self):
+        """System Manifest view — visualizes cognitive node states."""
+        sf, inner = scrollable(self.panel_content)
+        sf.pack(fill="both", expand=True)
+
+        header = tk.Frame(inner, bg=BG2, padx=14, pady=10)
+        header.pack(fill="x")
+        tk.Label(header, text="COGNITIVE LATTICE", bg=BG2, fg=ACCENT,
+                 font=("Segoe UI", 12, "bold")).pack(side="left")
+
+        status_lbl = tk.Label(header, text="SIGNAL ACTIVE", bg=BG2, fg=ACCENT3, font=FONT_TINY)
+        status_lbl.pack(side="right")
+
+        # Grid for nodes
+        node_frame = tk.Frame(inner, bg=BG2, padx=10, pady=10)
+        node_frame.pack(fill="x")
+
+        self._manifest_nodes = {}
+
+        def _update_manifest():
+            if not hasattr(self, "_manifest_nodes") or self.active_page != "manifest":
+                return
+
+            try:
+                import json
+                from pathlib import Path
+                state_file = Path.home() / 'echo_state.json'
+                thought_file = Path.home() / 'echo_thought.txt'
+
+                if state_file.exists():
+                    state = json.loads(state_file.read_text())
+                    nodes = state.get("nodes", {})
+                    for nid, nbox in self._manifest_nodes.items():
+                        if nid in nodes:
+                            act = nodes[nid].get("activity", 0)
+                            status = nodes[nid].get("status", "idle")
+                            # Update visual based on activity
+                            color = ACCENT if status == "active" else (ACCENT2 if status == "standby" else TEXT3)
+                            nbox["lbl"].configure(fg=color)
+                            nbox["bar"].place(relwidth=act/100.0)
+
+                if thought_file.exists():
+                    thought = thought_file.read_text().strip()
+                    self._manifest_thought.configure(text=thought or "no current focus logged.")
+            except:
+                pass
+
+            self.after(2000, _update_manifest)
+
+        # Build initial node grid
+        from event_router import _DEFAULTS as NODE_DEFS
+        row, col = 0, 0
+        for nid in NODE_DEFS.keys():
+            nb = tk.Frame(node_frame, bg=BG3, highlightthickness=1, highlightbackground=BORDER, padx=8, pady=6)
+            nb.grid(row=row, column=col, sticky="ew", padx=2, pady=2)
+            node_frame.columnconfigure(col, weight=1)
+
+            tk.Label(nb, text=nid, bg=BG3, fg=TEXT2, font=("Segoe UI", 8, "bold")).pack(anchor="w")
+
+            nlbl = tk.Label(nb, text="IDLE", bg=BG3, fg=TEXT3, font=FONT_TINY)
+            nlbl.pack(anchor="w")
+
+            pbar_bg = tk.Frame(nb, bg=BG4, height=2)
+            pbar_bg.pack(fill="x", pady=(4,0))
+            pbar = tk.Frame(pbar_bg, bg=ACCENT, height=2)
+            pbar.place(x=0, y=0, relwidth=0)
+
+            self._manifest_nodes[nid] = {"lbl": nlbl, "bar": pbar}
+
+            col += 1
+            if col > 2:
+                col = 0
+                row += 1
+
+        # Thought section
+        tk.Label(inner, text="CURRENT COGNITIVE FOCUS", bg=BG2, fg=TEXT3,
+                 font=("Segoe UI", 7, "bold"), padx=14).pack(anchor="w", pady=(12, 4))
+
+        tf = tk.Frame(inner, bg=BG3, padx=14, pady=12, highlightthickness=1, highlightbackground=BORDER)
+        tf.pack(fill="x", padx=10, pady=(0, 10))
+        self._manifest_thought = tk.Label(tf, text="awaiting signal...", bg=BG3, fg=TEXT,
+                                          font=FONT_SMALL, wraplength=350, justify="left")
+        self._manifest_thought.pack(anchor="w")
+
+        _update_manifest()
+
     def _page_settings(self):
         sf,inner=scrollable(self.panel_content); sf.pack(fill="both",expand=True)
         tk.Frame(inner,bg=BG2,height=10).pack()
@@ -851,6 +946,7 @@ class ChatOverlay(tk.Toplevel):
             ("terminal","Terminal","#111111","#ffb300"),
             ("light","Light","#ffffff","#5b4de8"),
             ("oled","OLED","#000000","#ffffff"),
+            ("echo_os","Echo OS","#050505","#06B6D4"),
         ]:
             tf=tk.Frame(theme_row,bg=BG3,cursor="hand2"); tf.pack(side="left",padx=6)
             # Preview box

@@ -157,3 +157,32 @@ def build_personality_context():
         return "\n".join(parts) if parts else ""
     except Exception as e:
         return ""
+
+def generate_reflective_summary():
+    """Analyze recent activity and generate a learning summary."""
+    try:
+        mem = update_memory_from_db()
+        mood_trend = get_mood_trend(7)
+        comp_rate  = get_goal_completion_rate()
+
+        summary = f"Reflective Summary - {datetime.datetime.now().strftime('%Y-%m-%d')}\n"
+        summary += f"Goal Completion Rate: {comp_rate}%\n"
+
+        if mood_trend:
+            avg_mood = sum(m for m, _ in mood_trend) / len(mood_trend)
+            summary += f"Average Mood (last 7 days): {avg_mood:.1f}/5\n"
+
+        if mem.get("focus_areas"):
+            summary += f"Primary Focus: {', '.join(mem['focus_areas'][:2])}\n"
+
+        summary += "\nEcho's Observation:\n"
+        if comp_rate > 70:
+            summary += "You've been highly productive. Echo is optimized for high-intensity support."
+        elif comp_rate < 40:
+            summary += "We're seeing a lot of pending tasks. Echo suggests breaking down large goals."
+        else:
+            summary += "Steady progress maintained. Cognitive alignment is nominal."
+
+        return summary
+    except Exception as e:
+        return f"Reflective cycle error: {e}"

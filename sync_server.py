@@ -89,9 +89,22 @@ def _handle_client(conn, addr):
     finally:
         conn.close()
 
+def _optimize_udp_buffers():
+    """Apply quic-go recommended UDP buffer size optimizations."""
+    try:
+        import subprocess
+        # Recommended: 7.5 MB (7500000 bytes)
+        subprocess.run(["sudo", "sysctl", "-w", "net.core.rmem_max=7500000"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["sudo", "sysctl", "-w", "net.core.wmem_max=7500000"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        pass
+
 def start_sync_server():
     global _server_thread, _running
     if _running: return
+    _optimize_udp_buffers()
     _running = True
     def _serve():
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
