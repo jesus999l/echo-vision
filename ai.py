@@ -34,6 +34,7 @@ _personality_cache = {"ctx": "", "ts": 0.0}
 # ── INTEGRATION SINGLETONS (set by main.py at startup) ──────────────────────
 _obsidian_bridge = None   # ObsidianBridge instance
 _web_searcher    = None   # WebSearch instance
+_hyperspace_bridge = None # HyperspaceBridge instance
 
 def set_obsidian_bridge(bridge):
     global _obsidian_bridge
@@ -42,6 +43,10 @@ def set_obsidian_bridge(bridge):
 def set_web_searcher(searcher):
     global _web_searcher
     _web_searcher = searcher
+
+def set_hyperspace_bridge(bridge):
+    global _hyperspace_bridge
+    _hyperspace_bridge = bridge
 
 def build_system_prompt():
     import time
@@ -108,7 +113,22 @@ Action types: move_event, edit_event, delete_event, add_event,
 complete_goal, delete_goal, add_goal,
 complete_habit, add_habit, delete_habit, add_journal
 
-Only add <action> when actually changing data.""" + _vault_context_block()
+Only add <action> when actually changing data.""" + _vault_context_block() + _hyperspace_context_block()
+
+def _hyperspace_context_block() -> str:
+    """Return context from Hyperspace search or status."""
+    if _hyperspace_bridge is None or not _hyperspace_bridge.is_available():
+        return ""
+    try:
+        recent = get_recent_messages(limit=1)
+        query = recent[-1]["content"] if recent else ""
+        if query:
+            results = _hyperspace_bridge.search(query)
+            if results:
+                return f"\n\nHYPERSPACE AGENT NETWORK CONTEXT:\n{results}"
+    except Exception:
+        pass
+    return ""
 
 def _vault_context_block() -> str:
     """Return Obsidian vault context string for prompt injection, or ''."""
