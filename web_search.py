@@ -56,7 +56,7 @@ logger = logging.getLogger("echo.websearch")
 
 DDG_INSTANT_URL  = "https://api.duckduckgo.com/"
 DDG_HTML_URL     = "https://html.duckduckgo.com/html/"
-DEFAULT_SEARXNG  = "http://localhost:8888"
+DEFAULT_SEARXNG  = "http://localhost:8081"
 
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "

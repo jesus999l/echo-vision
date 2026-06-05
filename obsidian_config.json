@@ -1,26 +1,22 @@
 {
-  "vault_path": "~/Documents/ObsidianVault",
-
+  "vault_path": "/home/jesus999l/Documents/ObsidianVault/Echo",
   "subfolders": {
-    "daily":         "Echo/Daily",
-    "habits":        "Echo/Habits",
-    "tasks":         "Echo/Tasks",
-    "briefings":     "Echo/Briefings",
-    "memory":        "Echo/Memory",
-    "conversations": "Echo/Conversations",
-    "security":      "Echo/Security",
-    "status":        "Echo/Status"
+    "daily": "Daily",
+    "habits": "Habits",
+    "tasks": "Tasks",
+    "briefings": "Briefings",
+    "memory": "Memory",
+    "conversations": "Conversations",
+    "security": "Security",
+    "status": "Status"
   },
-
   "watch_folders": [],
-
   "exclude_folders": [
     ".obsidian",
     ".trash",
     "Templates",
     "Attachments"
   ],
-
   "ingest_tags": [
     "echo-context",
     "echo-memory",
@@ -28,18 +24,15 @@
     "echo-journal",
     "jules-task"
   ],
-
   "ignore_tags": [
     "echo-ignore",
     "draft",
     "wip"
   ],
-
   "context_max_notes": 12,
   "context_max_chars": 4000,
   "write_enabled": true,
   "daily_summary_time": "23:30",
   "debounce_seconds": 2.5,
-
-  "jules_default_repo": ""
+  "jules_default_repo": "jesus999l/echo-vision"
 }

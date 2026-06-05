@@ -1,364 +1,345 @@
+#!/usr/bin/env python3
 """
-chroma_adapter.py — Echo v11.6 ChromaDB Backend
-================================================
-Implements the MockDBBackend interface for real persistent storage.
+chroma_adapter.py — Echo KB → ChromaDB Bridge
+Embeds Knowledge_Base/ files using nomic-embed-text via Ollama.
+Stores in a persistent local ChromaDB collection (no server needed).
 
-Two embedding modes:
-  - OllamaEmbeddingFunction: fully offline, uses nomic-embed-text via
-    your local Ollama instance. Preferred for Echo on T14s.
-  - ChromaDB default: downloads a model on first use (requires internet).
+Usage:
+  python3 chroma_adapter.py --sync        # embed all KB files
+  python3 chroma_adapter.py --query "X"   # test semantic search
+  python3 chroma_adapter.py --status      # show collection state
+  python3 chroma_adapter.py --rebuild     # wipe + re-embed everything
 
-Drop-in replacement:
-    from chroma_adapter import ChromaDBBackend
-    engine = MemoryEngine(db_backend=ChromaDBBackend())
-
-Also provides DriftSentinel — an enhanced auditor that names
-exactly which documents were displaced between recording and now.
+Import:
+  from chroma_adapter import query_kb, sync_kb
 """
 
-import json
-import math
-import hashlib
-import requests
-from typing import List, Dict, Any, Optional
-from collections import Counter
+import sys, os, re, json, hashlib, logging, urllib.request
+from pathlib import Path
+from datetime import datetime
 
-import chromadb
-from chromadb.utils import embedding_functions
+# ── CONFIG ────────────────────────────────────────────────────────────
 
-from echo_memory import RetrievalRecord, MemoryContext, MemoryEngine
+VAULT        = Path.home() / "Documents/ObsidianVault/Echo"
+KB           = VAULT / "Knowledge_Base"
+CHROMA_PATH  = Path.home() / ".chromadb" / "echo"
+COLLECTION   = "echo_kb"
+EMBED_MODEL  = "nomic-embed-text"
+OLLAMA_EMBED = "http://127.0.0.1:11434/api/embeddings"
+HASH_CACHE   = CHROMA_PATH / "file_hashes.json"
+TOP_K        = 3
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("chroma_adapter")
 
-# =========================================================
-# SIMPLE OFFLINE EMBEDDING FUNCTION
-# Word-frequency TF vector, L2-normalised.
-# No model downloads. Deterministic. Good enough for tests.
-# Use OllamaEmbeddingFunction in production.
-# =========================================================
+# ── CHROMADB CLIENT ───────────────────────────────────────────────────
 
-class SimpleEmbeddingFunction:
-    """
-    Bag-of-words TF vector, L2-normalised to unit length.
-    Produces meaningful cosine similarities without any model or
-    network access. Use this for tests; use OllamaEmbeddingFunction
-    in production for semantic quality.
-    """
+def get_client():
+    try:
+        import chromadb
+        CHROMA_PATH.mkdir(parents=True, exist_ok=True)
+        return chromadb.PersistentClient(path=str(CHROMA_PATH))
+    except ImportError:
+        log.error("chromadb not installed. Run: pip3 install chromadb --break-system-packages")
+        sys.exit(1)
 
-    # Fixed vocabulary size keeps vectors a constant dimension
-    VOCAB_SIZE = 512
+def get_collection(client=None):
+    c = client or get_client()
+    return c.get_or_create_collection(
+        name=COLLECTION,
+        metadata={"hnsw:space": "cosine"}
+    )
 
-    def name(self) -> str:
-        return "simple-bow-embedding"
+# ── EMBEDDING ─────────────────────────────────────────────────────────
 
-    def __call__(self, input: List[str]) -> List[List[float]]:
-        return [self._embed(text) for text in input]
+def embed(text: str) -> list | None:
+    """Get embedding vector from Ollama nomic-embed-text."""
+    payload = json.dumps({
+        "model": EMBED_MODEL,
+        "prompt": text[:3000]
+    }).encode()
+    req = urllib.request.Request(
+        OLLAMA_EMBED, data=payload,
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read()).get("embedding")
+    except Exception as e:
+        log.error(f"Embed failed: {e}")
+        return None
 
-    def embed_query(self, input: List[str]) -> List[List[float]]:
-        # ChromaDB 1.5+ calls this for query_texts
-        return self.__call__(input)
-        return [self._embed(text) for text in input]
+def check_ollama():
+    try:
+        urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3)
+        return True
+    except:
+        return False
 
-    def _embed(self, text: str) -> List[float]:
-        tokens = text.lower().split()
-        counts = Counter(tokens)
-        vec = [0.0] * self.VOCAB_SIZE
-        for token, count in counts.items():
-            idx = int(hashlib.md5(token.encode()).hexdigest(), 16) % self.VOCAB_SIZE
-            vec[idx] += float(count)
-        norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-        return [x / norm for x in vec]
+# ── FILE PARSING ──────────────────────────────────────────────────────
 
+def parse_kb_file(path: Path) -> dict:
+    """Parse a KB markdown file into structured metadata + content."""
+    raw = path.read_text(encoding="utf-8").strip()
 
-# =========================================================
-# OLLAMA EMBEDDING FUNCTION
-# Wraps nomic-embed-text (already in your Ollama stack).
-# Fully offline. No external downloads.
-# =========================================================
+    # Extract frontmatter
+    fm = {}
+    content = raw
+    if raw.startswith("---"):
+        end = raw.find("---", 3)
+        if end > 0:
+            fm_block = raw[3:end].strip()
+            content = raw[end+3:].strip()
+            for line in fm_block.split("\n"):
+                if ":" in line:
+                    k, _, v = line.partition(":")
+                    fm[k.strip()] = v.strip()
 
-class OllamaEmbeddingFunction:
-    """
-    ChromaDB-compatible embedding function backed by Ollama.
+    # Extract title
+    title_m = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
+    title = title_m.group(1).strip() if title_m else path.stem.replace("-", " ").title()
 
-    Uses nomic-embed-text by default — already pulled on your T14s.
-    Switch model= to any other Ollama embed model if needed.
-    """
+    # Extract status
+    status = fm.get("status", "unknown")
 
-    def __init__(
-        self,
-        model: str = "nomic-embed-text",
-        base_url: str = "http://localhost:11434",
-    ):
-        self.model    = model
-        self.base_url = base_url
+    # Build searchable text: title + rules + what_works + current_status sections
+    sections = []
+    for section in re.split(r"^##\s+", content, flags=re.MULTILINE):
+        if section.strip():
+            sections.append(section.strip()[:500])
+    search_text = f"{title}\n\n" + "\n\n".join(sections[:4])
 
-    def __call__(self, input: List[str]) -> List[List[float]]:
-        embeddings = []
-        for text in input:
-            resp = requests.post(
-                f"{self.base_url}/api/embeddings",
-                json={"model": self.model, "prompt": text},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            embeddings.append(resp.json()["embedding"])
-        return embeddings
-
-
-# =========================================================
-# CHROMA DB BACKEND
-# Implements the same interface as MockDBBackend.
-# =========================================================
-
-class ChromaDBBackend:
-    """
-    Persistent ChromaDB backend for Echo's memory layer.
-
-    Collections layout (one per source type, metadata-filtered):
-      echo_episodic   — lived experiences, browser events, session logs
-      echo_semantic   — distilled knowledge, facts, concepts
-      echo_graph      — relationship nodes / neighbors
-
-    Each document stored with metadata: {source, doc_id, summary}
-    so we can reconstruct full RetrievalRecords from query results.
-    """
-
-    SOURCE_COLLECTIONS = {
-        "episodic": "echo_episodic",
-        "semantic": "echo_semantic",
-        "graph":    "echo_graph",
+    return {
+        "id": path.stem,
+        "title": title,
+        "status": status,
+        "tags": fm.get("tags", ""),
+        "compiled_at": fm.get("compiled_at", ""),
+        "content": content[:2000],
+        "search_text": search_text[:2000],
+        "path": str(path),
+        "hash": hashlib.md5(raw.encode()).hexdigest()
     }
 
-    def __init__(
-        self,
-        persist_path: str = "./echo_chroma_db",
-        embedding_fn=None,
-    ):
-        """
-        persist_path:  where ChromaDB writes its files.
-                       Recommend ~/vision_assistant/echo_chroma_db
-        embedding_fn:  pass OllamaEmbeddingFunction() for offline mode,
-                       or None to use ChromaDB's default (needs internet
-                       on first run to download the model).
-        """
-        self._client = chromadb.PersistentClient(path=persist_path)
-        self._embed_fn = embedding_fn  # None = use ChromaDB default
+# ── HASH CACHE ────────────────────────────────────────────────────────
 
-        self._collections: Dict[str, Any] = {}
-        for source, name in self.SOURCE_COLLECTIONS.items():
-            kwargs = {"name": name, "metadata": {"hnsw:space": "cosine"}}
-            if self._embed_fn is not None:
-                kwargs["embedding_function"] = self._embed_fn
-            self._collections[source] = (
-                self._client.get_or_create_collection(**kwargs)
+def load_hashes() -> dict:
+    if HASH_CACHE.exists():
+        try:
+            return json.loads(HASH_CACHE.read_text())
+        except:
+            pass
+    return {}
+
+def save_hashes(hashes: dict):
+    HASH_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    HASH_CACHE.write_text(json.dumps(hashes, indent=2))
+
+# ── SYNC ─────────────────────────────────────────────────────────────
+
+def sync_kb(force=False) -> dict:
+    """
+    Embed all new/changed KB files into ChromaDB.
+    Skips unchanged files (hash comparison).
+    Returns: {added, updated, skipped, errors}
+    """
+    if not check_ollama():
+        log.error("Ollama not running — cannot embed. Start Ollama first.")
+        return {"added": 0, "updated": 0, "skipped": 0, "errors": 1}
+
+    if not KB.exists():
+        log.error(f"Knowledge_Base not found at {KB}")
+        return {"added": 0, "updated": 0, "skipped": 0, "errors": 1}
+
+    col = get_collection()
+    hashes = {} if force else load_hashes()
+    stats = {"added": 0, "updated": 0, "skipped": 0, "errors": 0}
+
+    kb_files = list(KB.glob("*.md"))
+    log.info(f"Syncing {len(kb_files)} KB files to ChromaDB...")
+
+    for f in kb_files:
+        try:
+            parsed = parse_kb_file(f)
+            file_hash = parsed["hash"]
+
+            # Skip if unchanged
+            if not force and hashes.get(parsed["id"]) == file_hash:
+                stats["skipped"] += 1
+                continue
+
+            # Get embedding
+            vec = embed(parsed["search_text"])
+            if not vec:
+                log.warning(f"  Could not embed {f.name}")
+                stats["errors"] += 1
+                continue
+
+            # Upsert into ChromaDB
+            col.upsert(
+                ids=[parsed["id"]],
+                embeddings=[vec],
+                documents=[parsed["content"]],
+                metadatas=[{
+                    "title": parsed["title"],
+                    "status": parsed["status"],
+                    "path": parsed["path"],
+                    "compiled_at": parsed["compiled_at"],
+                    "hash": file_hash
+                }]
             )
 
-    # ----------------------------------------------------------
-    # Public interface (matches MockDBBackend)
-    # ----------------------------------------------------------
+            action = "updated" if hashes.get(parsed["id"]) else "added"
+            stats[action] += 1
+            hashes[parsed["id"]] = file_hash
+            log.info(f"  {action}: {parsed['title']}")
 
-    def query(
-        self,
-        query_text: str,
-        source: str,
-        n_results: int = 5,
-    ) -> List[RetrievalRecord]:
-        """
-        Query one source collection. Returns RetrievalRecords with
-        full provenance (doc_id, score, summary, query string).
-        """
-        collection = self._collections.get(source)
-        if collection is None:
-            return []
+        except Exception as e:
+            log.error(f"  Error processing {f.name}: {e}")
+            stats["errors"] += 1
 
-        count = collection.count()
-        if count == 0:
-            return []
+    save_hashes(hashes)
+    total = col.count()
+    log.info(f"Sync complete. Collection: {total} entries. {stats}")
+    return stats
 
-        # Don't request more results than exist
-        actual_n = min(n_results, count)
+# ── QUERY ─────────────────────────────────────────────────────────────
 
-        results = collection.query(
-            query_texts=[query_text],
-            n_results=actual_n,
-            include=["documents", "metadatas", "distances"],
-        )
-
-        records = []
-        docs      = results["documents"][0]
-        metadatas = results["metadatas"][0]
-        distances = results["distances"][0]
-
-        for doc, meta, dist in zip(docs, metadatas, distances):
-            # ChromaDB cosine distance → similarity: 1 - distance
-            similarity = round(1.0 - dist, 6)
-            records.append(
-                RetrievalRecord(
-                    doc_id          = meta.get("doc_id", "unknown"),
-                    summary         = meta.get("summary", doc[:120]),
-                    similarity_score = similarity,
-                    source          = source,
-                    retrieval_query = query_text,
-                )
-            )
-
-        return records
-
-    def add_document(
-        self,
-        source: str,
-        doc_id: str,
-        text: str,
-        summary: str = "",
-    ):
-        """
-        Add a document to a source collection.
-        text    — full content (embedded)
-        summary — short label stored in metadata (returned in records)
-        """
-        collection = self._collections[source]
-        collection.add(
-            documents=[text],
-            ids=[doc_id],
-            metadatas=[{
-                "doc_id":  doc_id,
-                "summary": summary or text[:120],
-                "source":  source,
-            }],
-        )
-
-    def delete_document(self, source: str, doc_id: str):
-        """Remove a document. Used by the poisoning test to clean up."""
-        self._collections[source].delete(ids=[doc_id])
-
-    def document_exists(self, source: str, doc_id: str) -> bool:
-        result = self._collections[source].get(ids=[doc_id])
-        return len(result["ids"]) > 0
-
-
-# =========================================================
-# DRIFT SENTINEL
-# Enhanced DriftAuditor that names displaced documents.
-# =========================================================
-
-class DriftSentinel:
+def query_kb(query: str, top_k: int = TOP_K) -> list:
     """
-    Compares a fossilized memory against the live DB at query time.
-
-    Unlike DriftAuditor (hash-only), DriftSentinel resolves *which*
-    documents were added, removed, or displaced between the trace
-    recording and now.
-
-    Isolation guarantee: the live query runs in a shadow thread.
-    The replay decision is never affected — only the report changes.
+    Semantic search over KB collection.
+    Returns: [{id, title, content, status, score}]
     """
+    if not check_ollama():
+        return []
 
-    def __init__(self, db_backend: ChromaDBBackend):
-        self._db = db_backend
+    col = get_collection()
+    if col.count() == 0:
+        log.warning("ChromaDB collection empty — run sync first")
+        return []
 
-    def audit(
-        self,
-        trace: Dict[str, Any],
-        n_results: int = 5,
-    ) -> Dict[str, Any]:
-        """
-        Full displacement analysis across all three source collections.
+    vec = embed(query)
+    if not vec:
+        return []
 
-        Returns a report dict with per-source displacement maps.
-        """
-        event         = trace["event"]
-        query_text    = event.get("payload", {}).get("command", "")
-        fossilized_mc = MemoryContext.from_dict(trace["memory_context"])
+    try:
+        results = col.query(
+            query_embeddings=[vec],
+            n_results=min(top_k, col.count()),
+            include=["documents", "metadatas", "distances"]
+        )
+    except Exception as e:
+        log.error(f"Query failed: {e}")
+        return []
 
-        report = {
-            "drift_detected": False,
-            "fossilized_hash": fossilized_mc.memory_hash,
-            "live_hash": "",
-            "timestamp": trace["timestamp"],
-            "event_type": event.get("event_type", "unknown"),
-            "sources": {},
-        }
+    output = []
+    ids       = results.get("ids", [[]])[0]
+    docs      = results.get("documents", [[]])[0]
+    metas     = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
 
-        for source, fossil_records in [
-            ("episodic",        fossilized_mc.episodic),
-            ("semantic",        fossilized_mc.semantic),
-            ("graph_neighbors", fossilized_mc.graph_neighbors),
-        ]:
-            chroma_source = "graph" if source == "graph_neighbors" else source
-            live_records  = self._db.query(query_text, chroma_source, n_results)
+    for i, doc_id in enumerate(ids):
+        # ChromaDB cosine distance: 0=identical, 2=opposite. Convert to similarity.
+        similarity = 1 - (distances[i] / 2) if distances else 0
+        if similarity < 0.3:
+            continue
+        meta = metas[i] if i < len(metas) else {}
+        output.append({
+            "id": doc_id,
+            "title": meta.get("title", doc_id),
+            "content": docs[i] if i < len(docs) else "",
+            "status": meta.get("status", "unknown"),
+            "path": meta.get("path", ""),
+            "score": round(similarity, 3)
+        })
 
-            source_report = self._diff_records(fossil_records, live_records)
-            report["sources"][source] = source_report
+    return output
 
-            if source_report["displaced"] or source_report["added"] or source_report["removed"]:
-                report["drift_detected"] = True
+def get_context_block(query: str, top_k: int = TOP_K) -> str:
+    """
+    Returns formatted context string for Ollama prompt injection.
+    Drop-in replacement for echo_kb_context.get_kb_context()
+    """
+    results = query_kb(query, top_k)
+    if not results:
+        return ""
 
-        # Recompute live hash via a fresh MemoryContext
-        live_mc = MemoryContext(
-            episodic        = self._db.query(query_text, "episodic",  n_results),
-            semantic        = self._db.query(query_text, "semantic",  n_results),
-            graph_neighbors = self._db.query(query_text, "graph",     n_results),
-            active_goals    = fossilized_mc.active_goals,
-            constraints     = fossilized_mc.constraints,
-        ).seal()
+    lines = ["[ECHO KNOWLEDGE BASE — semantic context]"]
+    for r in results:
+        lines.append(f"\n## {r['title']} [score: {r['score']}]")
+        # Extract most relevant section
+        content = r["content"]
+        excerpt = content[:400].strip()
+        lines.append(excerpt)
+    lines.append("\n[end KB context]")
+    return "\n".join(lines)
 
-        report["live_hash"] = live_mc.memory_hash
+# ── STATUS ─────────────────────────────────────────────────────────────
 
-        self._print_report(report)
-        return report
+def status():
+    print(f"\nChromaDB Adapter Status")
+    print(f"{'─'*40}")
+    print(f"Storage  : {CHROMA_PATH}")
+    print(f"KB path  : {KB}")
+    print(f"Ollama   : {'running ✓' if check_ollama() else 'not running ✗'}")
 
-    def _diff_records(
-        self,
-        fossil: List[RetrievalRecord],
-        live:   List[RetrievalRecord],
-    ) -> Dict[str, Any]:
-        fossil_ids = {r.doc_id for r in fossil}
-        live_ids   = {r.doc_id for r in live}
+    try:
+        col = get_collection()
+        count = col.count()
+        print(f"Collection: {COLLECTION} — {count} entries")
 
-        removed    = fossil_ids - live_ids   # in trace, gone from DB
-        added      = live_ids - fossil_ids   # new in DB, not in trace
-        stable     = fossil_ids & live_ids   # same doc in both
-
-        # Displacement = a removed doc replaced by an added doc
-        displaced_pairs = list(zip(sorted(removed), sorted(added)))
-
-        def record_label(records, doc_id):
-            for r in records:
-                if r.doc_id == doc_id:
-                    return f"{r.doc_id} | score={r.similarity_score:.4f} | {r.summary[:60]}"
-            return doc_id
-
-        return {
-            "stable":     sorted(stable),
-            "removed":    [record_label(fossil, d) for d in sorted(removed)],
-            "added":      [record_label(live,   d) for d in sorted(added)],
-            "displaced":  [
-                {
-                    "was":  record_label(fossil, old),
-                    "now":  record_label(live,   new),
-                }
-                for old, new in displaced_pairs
-            ],
-        }
-
-    def _print_report(self, report: Dict[str, Any]):
-        print("\n===== DRIFT SENTINEL =====")
-        if not report["drift_detected"]:
-            print("✅ MEMORY STABLE — live DB matches fossilized context exactly.")
+        hashes = load_hashes()
+        kb_files = list(KB.glob("*.md"))
+        unsynced = [f.stem for f in kb_files if f.stem not in hashes]
+        if unsynced:
+            print(f"Unsynced : {len(unsynced)} files need embedding")
+            for u in unsynced:
+                print(f"  - {u}")
         else:
-            print("⚠️  RETRIEVAL DRIFT DETECTED")
-            print(f"   Fossilized : {report['fossilized_hash'][:32]}...")
-            print(f"   Live DB    : {report['live_hash'][:32]}...")
-            print()
-            for source, sr in report["sources"].items():
-                if sr["displaced"] or sr["added"] or sr["removed"]:
-                    print(f"  [{source.upper()}]")
-                    for pair in sr["displaced"]:
-                        print(f"    DISPLACED:")
-                        print(f"      WAS → {pair['was']}")
-                        print(f"      NOW → {pair['now']}")
-                    for doc in sr["removed"]:
-                        print(f"    REMOVED  : {doc}")
-                    for doc in sr["added"]:
-                        print(f"    ADDED    : {doc}")
-        print(f"\n   Event     : {report['event_type']}")
-        print(f"   Timestamp : {report['timestamp']}")
+            print(f"Sync     : all {len(kb_files)} KB files embedded ✓")
+    except Exception as e:
+        print(f"Collection error: {e}")
+    print()
+
+# ── CLI ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    args = sys.argv[1:]
+
+    if "--status" in args:
+        status()
+
+    elif "--sync" in args or not args:
+        status()
+        sync_kb(force="--rebuild" in args)
+
+    elif "--rebuild" in args:
+        log.info("Rebuilding — wiping existing collection...")
+        c = get_client()
+        try:
+            c.delete_collection(COLLECTION)
+            log.info("Collection wiped.")
+        except:
+            pass
+        # Also clear hash cache
+        if HASH_CACHE.exists():
+            HASH_CACHE.unlink()
+        sync_kb(force=True)
+
+    elif "--query" in args:
+        idx = args.index("--query")
+        q = " ".join(args[idx+1:])
+        if not q:
+            print("Usage: chroma_adapter.py --query <text>")
+            sys.exit(1)
+        print(f"Query: {q}\n")
+        results = query_kb(q)
+        if results:
+            for r in results:
+                print(f"  {r['score']:.3f}  {r['title']}  [{r['status']}]")
+            print(f"\nContext block:\n{get_context_block(q)}")
+        else:
+            print("No results — run --sync first")
+
+    else:
+        print(__doc__)

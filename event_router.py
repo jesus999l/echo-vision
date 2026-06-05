@@ -45,7 +45,7 @@ class EventRouter:
     def __init__(self):
         self._nodes = {k: dict(v) for k, v in _DEFAULTS.items()}
         self._voice  = 'STANDBY'
-        self._model  = 'gemma3'
+        self._model  = 'qwen2.5:0.5b'
         self._cycle  = 'IDLE'
         self._memint = 100
         self._last   = None

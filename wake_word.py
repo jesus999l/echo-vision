@@ -51,9 +51,9 @@ def _load_whisper():
     global _whisper_model
     if _whisper_model is None:
         from faster_whisper import WhisperModel
-        print("[wake] Loading faster-whisper base.en (int8)...")
+        print("[wake] Loading faster-whisper small.en (int8)...")
         _whisper_model = WhisperModel(
-            "base.en", device="cpu", compute_type="int8",
+            "small.en", device="cpu", compute_type="int8",
             num_workers=2, cpu_threads=4,
         )
         print("[wake] Whisper ready.")
@@ -65,7 +65,7 @@ def _transcribe_whisper(audio_path):
         segs, info = m.transcribe(
             audio_path, language="en",
             vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 300},
+            vad_parameters={"min_silence_duration_ms": 500},
             condition_on_previous_text=False,
             temperature=0.0,
             beam_size=1,
@@ -253,7 +253,7 @@ def _record_command(pa, seconds=COMMAND_TIMEOUT):
 
     if speech_started:
         silence_frames = 0
-        MAX_SILENCE = 8   # 8 × 20ms = 160ms of silence → stop
+        MAX_SILENCE = 20   # 8 × 20ms = 160ms of silence → stop
         max_frames = int(1000 / FRAME_MS * seconds)
         buf = b""
         for _ in range(max_frames):
@@ -834,18 +834,6 @@ def route_command(text):
             except Exception as e:
                 print(f"[wake] farm error: {e}")
         import threading; threading.Thread(target=_start_farm, daemon=True).start(); return
-
-    if any(x in t for x in ["what's my loadout", "current loadout", "my loadout", "what am i using"]):
-        def _speak_loadout():
-            try:
-                from warframe_loadout import get_loadout_summary
-                from voice import speak
-                summary = get_loadout_summary()
-                speak(f"Current loadout: {summary}")
-                _notify(summary)
-            except Exception as e:
-                print(f"[wake] loadout error: {e}")
-        import threading; threading.Thread(target=_speak_loadout, daemon=True).start(); return
 
     if any(x in t for x in ["stop farming", "stop bot", "stop warframe bot"]):
         import subprocess as _sp

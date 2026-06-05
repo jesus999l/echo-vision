@@ -22,11 +22,12 @@ FF_PROFILE = os.path.expanduser("~/.mozilla/firefox/sjkuigqa.default-release")
 PLACES_DB  = os.path.join(FF_PROFILE, "places.sqlite")
 INTERESTS_FILE = os.path.expanduser("~/vision_assistant/echo_interests.json")
 AVAILABLE_MODELS = [
-    {"id":"qwen2.5:0.5b",         "name":"Qwen2.5 Fast", "type":"ollama"},
-    {"id":"gemma3n-local:latest", "name":"Gemma3n Local", "type":"ollama"},
-    {"id":"claude",               "name":"Claude API",   "type":"claude"},
+    {"id":"qwen3-fast:4b",   "name":"Qwen3 Fast",  "type":"ollama"},
+    {"id":"phi4-mini:latest","name":"Phi4 Mini",   "type":"ollama"},
+    {"id":"gemma3:latest",   "name":"Gemma 3",     "type":"ollama"},
+    {"id":"claude",          "name":"Claude API",  "type":"claude"},
 ]
-_current_model = "qwen2.5:0.5b"
+_current_model = "qwen3-fast:4b"
 
 TV_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -780,7 +781,7 @@ function stopMusic(){
 }
 
 // ── MODEL CYCLE ──
-const models=['qwen2.5:0.5b','gemma3n-local:latest'];
+const models=['qwen3-fast:4b','phi4-mini:latest','gemma3:latest'];
 let mIdx=0;
 async function cycleModel(){
   mIdx=(mIdx+1)%models.length;
@@ -852,7 +853,7 @@ def get_interests():
         except: pass
     return build_interest_profile()
 
-def chat_ollama(message, model="qwen2.5:0.5b", context=""):
+def chat_ollama(message, model="qwen3-fast:4b", context=""):
     system=f"You are Echo, home AI on a TV interface. Interests: {context}. Be concise."
     payload=json.dumps({"model":model,"messages":[{"role":"system","content":system},{"role":"user","content":message}],"stream":False}).encode()
     req=urllib.request.Request("http://127.0.0.1:11434/v1/chat/completions",data=payload,headers={"Content-Type":"application/json"})
@@ -931,114 +932,6 @@ class EchoHandler(BaseHTTPRequestHandler):
             m=body.get("model")
             if m: _current_model=m; self._json({"ok":True,"model":m})
             else: self._json({"error":"no model"},400)
-
-
-
-        elif p=="/brainstorm":
-            msg=body.get("message","")
-            providers=body.get("providers",["perplexity","chatgpt","gemini"])
-            if not msg: self._json({"error":"no message"},400); return
-            try:
-                import urllib.request as _ur, json as _jj
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                PROX="http://localhost:3210"
-                EMOJIS={"perplexity":"🔍","chatgpt":"💬","gemini":"✦","claude":"◆"}
-                def _ask(pid,prompt):
-                    try:
-                        pl=_jj.dumps({"model":pid,"messages":[{"role":"user","content":prompt}]}).encode()
-                        req=_ur.Request(PROX+"/v1/chat/completions",data=pl,headers={"Content-Type":"application/json"})
-                        with _ur.urlopen(req,timeout=90) as r:
-                            return pid,_jj.loads(r.read())["choices"][0]["message"]["content"]
-                    except Exception as e: return pid,""
-                # Round 1: individual ideas
-                r1={}
-                with ThreadPoolExecutor(max_workers=len(providers)) as pool:
-                    for pid,text in [f.result() for f in as_completed(
-                            [pool.submit(_ask,p,"Generate 3 creative ideas for: "+msg) for p in providers])]:
-                        r1[pid]=text
-                # Round 2: each AI builds on ALL others
-                all_ideas="\n\n".join(EMOJIS.get(p,"●")+" "+p.upper()+": "+t for p,t in r1.items() if t)
-                r2={}
-                with ThreadPoolExecutor(max_workers=len(providers)) as pool:
-                    prompt2=("Original: "+msg+"\n\nAll ideas so far:\n"+all_ideas+
-                             "\n\nSynthesize the best elements into 2 refined ideas. Add something new.")
-                    for pid,text in [f.result() for f in as_completed(
-                            [pool.submit(_ask,p,prompt2) for p in providers])]:
-                        r2[pid]=text
-                # Round 3: single synthesis
-                all_r2="\n\n".join(EMOJIS.get(p,"●")+" "+p.upper()+": "+t for p,t in r2.items() if t)
-                _,synthesis=_ask(providers[0],"All refined ideas:\n"+all_r2+"\n\nWrite the single best actionable plan:")
-                self._json({"topic":msg,"round1":r1,"round2":r2,"synthesis":synthesis})
-            except Exception as e: self._json({"error":str(e)},500)
-        elif p=="/discuss":
-            msg=body.get("message","")
-            rounds=body.get("rounds",2)
-            providers=body.get("providers",["perplexity","chatgpt","gemini"])
-            if not msg: self._json({"error":"no message"},400); return
-            try:
-                import urllib.request as _ur, json as _jj
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                PROX="http://localhost:3210"
-                EMOJIS={"perplexity":"🔍","chatgpt":"💬","gemini":"✦","claude":"◆"}
-                def _ask(pid,prompt):
-                    try:
-                        pl=_jj.dumps({"model":pid,"messages":[{"role":"user","content":prompt}]}).encode()
-                        req=_ur.Request(PROX+"/v1/chat/completions",data=pl,headers={"Content-Type":"application/json"})
-                        with _ur.urlopen(req,timeout=60) as r:
-                            return pid,_jj.loads(r.read())["choices"][0]["message"]["content"]
-                    except Exception as e:
-                        return pid,f"[unavailable: {e}]"
-                discussion=[]
-                context=msg
-                for rnd in range(rounds):
-                    round_responses={}
-                    with ThreadPoolExecutor(max_workers=len(providers)) as pool:
-                        for pid,text in [f.result() for f in as_completed(
-                                [pool.submit(_ask,p,context) for p in providers])]:
-                            round_responses[pid]=text
-                    discussion.append({"round":rnd+1,"responses":round_responses})
-                    # Build context for next round: each AI sees others' responses
-                    prev=[]
-                    for pid,text in round_responses.items():
-                        prev.append(EMOJIS.get(pid,"●")+" "+pid.upper()+": "+text[:300])
-                    context=("Original topic: "+msg+"\n\nPrevious responses:\n"+
-                             "\n\n".join(prev)+"\n\nRespond to the above — build on, challenge, or synthesize:")
-                self._json({"discussion":discussion,"topic":msg,"rounds":rounds})
-            except Exception as e: self._json({"error":str(e)},500)
-        elif p=="/pipeline":
-            msg=body.get("message","")
-            mode=body.get("mode","chat")
-            if not msg: self._json({"error":"no message"},400); return
-            try:
-                import urllib.request as _ur, json as _jj
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                PROX = "http://localhost:3210"
-                _all = [("perplexity","🔍"),("chatgpt","💬"),("gemini","✦"),("claude","◆")]
-                _req_providers = body.get("providers", ["perplexity","chatgpt","gemini"])
-                PROVIDERS = [(p,e) for p,e in _all if p in _req_providers]
-                pfx = {"chat":msg,"think":"Think step by step:\n"+msg,
-                       "plan":"Detailed plan for:\n"+msg,
-                       "learn":"Key insights from:\n"+msg,
-                       "vault":"Organize in knowledge base:\n"+msg}
-                prompt = pfx.get(mode, msg)
-                def _ask(pid, emoji):
-                    try:
-                        pl=_jj.dumps({"model":pid,"messages":[{"role":"user","content":prompt}]}).encode()
-                        req=_ur.Request(PROX+"/v1/chat/completions",data=pl,
-                                        headers={"Content-Type":"application/json"})
-                        with _ur.urlopen(req,timeout=60) as r:
-                            return pid,{"text":_jj.loads(r.read())["choices"][0]["message"]["content"],"emoji":emoji}
-                    except Exception as e:
-                        return pid,{"text":"","error":str(e)[:80]}
-                responses={}
-                with ThreadPoolExecutor(max_workers=3) as pool:
-                    for pid,info in [ft.result() for ft in as_completed(
-                            [pool.submit(_ask,p,e) for p,e in PROVIDERS])]:
-                        responses[pid]=info
-                if not any(v.get("text") for v in responses.values()):
-                    pid,info=_ask("claude","◆"); responses[pid]=info
-                self._json({"responses":responses,"mode":mode,"message":msg})
-            except Exception as e: self._json({"error":str(e)},500)
         elif p=="/launch":
             pkg=body.get("package","")
             if pkg:

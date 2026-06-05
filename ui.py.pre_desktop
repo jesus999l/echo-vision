@@ -5,7 +5,7 @@ import threading
 import os, sys, datetime, calendar, time, json
 sys.path.insert(0, os.path.expanduser("~/vision_assistant"))
 
-from config import SCREENSHOT_PATH, DEFAULT_MODEL
+from config import SCREENSHOT_PATH
 
 # Page data cache - avoid repeated DB queries
 _PAGE_CACHE = {}
@@ -338,30 +338,9 @@ class ChatOverlay(tk.Toplevel):
         self._drag_event=None
         self._drag_origin=None
         self.task_mode=tk.BooleanVar(value=False)
-        self._pipeline_stage='chat'
-        self._ai_enabled={'perplexity':True,'chatgpt':True,'gemini':True,'grok':True,'claude':False}
-        self._stage_btns={}
-        self._ai_btns={}
         self._drag_event=None; self._drag_origin=None; self._did_drag=False
         purge_old_habits()
         self._build()
-
-        # ── Settings gear button ──────────────────────────────────────────────
-        try:
-            from echo_settings_panel import SettingsPanel
-            def _open_settings():
-                SettingsPanel(self)
-            self._gear_btn = tk.Button(
-                self, text="⚙", bg="#1a1a2e", fg="#888888",
-                font=("Segoe UI", 13), bd=0, padx=8, pady=4,
-                cursor="hand2", activebackground="#0f3460",
-                activeforeground="#ffffff", command=_open_settings
-            )
-            self._gear_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-2, y=2)
-            self._gear_btn.lift()
-        except Exception as _e:
-            print(f"[settings] gear button error: {_e}")
-        # ─────────────────────────────────────────────────────────────────────
         self.bind_all("<MouseWheel>",self._on_mousewheel)
         self.bind_all("<Button-4>",self._on_mousewheel)
         self.bind_all("<Button-5>",self._on_mousewheel)
@@ -595,38 +574,9 @@ class ChatOverlay(tk.Toplevel):
         self.chat_text.tag_config("role_output",foreground=TEXT2,font=FONT_MONO)
         self.chat_text.tag_config("divider",foreground=TEXT3,font=("Segoe UI",7))
 
-
-        # Stage pills row
-        sp=tk.Frame(self.bubble_panel,bg=BG3,pady=4,padx=6)
-        sp.grid(row=2,column=0,sticky='ew')
-        for _sid,_slabel in [('chat','💬'),('think','🧠'),('plan','📋'),('learn','📚'),('vault','🗄'),('discuss','🗣'),('brainstorm','💡')]:
-            _sb=tk.Label(sp,text=_slabel,bg=ACCENT if _sid=='chat' else BG4,
-                         fg=WHITE,font=('Segoe UI',10),padx=8,pady=3,cursor='hand2',relief='flat')
-            _sb.pack(side='left',padx=2)
-            _sb.bind('<Button-1>',lambda e,s=_sid:self._set_pipeline_stage(s))
-            self._stage_btns[_sid]=_sb
-
-        # AI toggles row
-        at=tk.Frame(self.bubble_panel,bg=BG2,pady=4,padx=6)
-        at.grid(row=3,column=0,sticky='ew')
-        _ai_defs=[('perplexity','🔍 Perplexity','#20B2AA'),
-                  ('chatgpt','💬 ChatGPT','#74AA9C'),
-                  ('gemini','✦ Gemini','#4285F4'),
-                  ('grok','𝕏 Grok','#1DA1F2'),
-                  ('claude','◆ Claude','#CC785C')]
-        for _aid,_alabel,_acol in _ai_defs:
-            _on=self._ai_enabled.get(_aid,True)
-            _ab=tk.Label(at,text=_alabel,
-                         bg=_acol if _on else BG4,
-                         fg=WHITE,font=('Segoe UI',8),
-                         padx=6,pady=2,cursor='hand2',relief='flat')
-            _ab.pack(side='left',padx=2)
-            _ab.bind('<Button-1>',lambda e,a=_aid,c=_acol:self._toggle_ai(a,c))
-            self._ai_btns[_aid]=(_ab,_acol)
-
         # Input row
         inf=tk.Frame(self.bubble_panel,bg=BG3,pady=8,padx=8)
-        inf.grid(row=4,column=0,sticky="ew")
+        inf.grid(row=2,column=0,sticky="ew")
         inf.columnconfigure(0,weight=1)
         self.input_box=tk.Entry(inf,bg=BG4,fg=TEXT,insertbackground=ACCENT,
                                  relief="flat",font=FONT_BODY,highlightthickness=1,
@@ -642,7 +592,7 @@ class ChatOverlay(tk.Toplevel):
 
         # Task mode toggle
         tm=tk.Frame(self.bubble_panel,bg=BG3,padx=8,pady=4)
-        tm.grid(row=5,column=0,sticky="ew")
+        tm.grid(row=3,column=0,sticky="ew")
         tk.Checkbutton(tm,text="TASK MODE",variable=self.task_mode,bg=BG3,fg=TEXT3,
                         selectcolor=BG4,activebackground=BG3,font=("Segoe UI",8,"bold"),
                         highlightthickness=0).pack(side="left")
@@ -1023,7 +973,7 @@ class ChatOverlay(tk.Toplevel):
         section("AI MODEL",ACCENT2)
         m_frame=tk.Frame(inner,bg=BG3,padx=14,pady=12); m_frame.pack(fill="x",padx=10,pady=(0,6))
         tk.Label(m_frame,text="Default model on startup:",bg=BG3,fg=TEXT3,font=FONT_TINY).pack(anchor="w")
-        m_var=tk.StringVar(value=SETTINGS.get("default_model", DEFAULT_MODEL))
+        m_var=tk.StringVar(value=SETTINGS.get("default_model","gemma3:latest"))
         om=tk.OptionMenu(m_frame,m_var,*self.models)
         om.config(bg=BG2,fg=TEXT,relief="flat",font=FONT_SMALL,
                   highlightthickness=1,highlightbackground=BORDER)
@@ -2313,46 +2263,6 @@ class ChatOverlay(tk.Toplevel):
             speak(text)
         except: pass
 
-    def _set_pipeline_stage(self,stage):
-        self._pipeline_stage=stage
-        hints={'chat':'Ask Echo...','think':'What to reason through?',
-               'plan':'What to plan?','learn':'What to explain?','vault':'What to vault?'}
-        try: self.input_box.config(fg=TEXT)
-        except: pass
-        for sid,btn in self._stage_btns.items():
-            try: btn.config(bg=ACCENT if sid==stage else BG4)
-            except: pass
-
-    def _toggle_ai(self,aid,color):
-        self._ai_enabled[aid]=not self._ai_enabled.get(aid,True)
-        btn,col=self._ai_btns[aid]
-        try: btn.config(bg=col if self._ai_enabled[aid] else BG4)
-        except: pass
-
-        # ── AI TOGGLE FIX: push enabled list to ai.py ───────────────────────
-        # Find your EchoApp or parent that holds self.ai and call set_enabled.
-        # Replace the block below with whatever your app structure looks like:
-        ai_ref = None
-        if hasattr(self, "ai"):
-            ai_ref = self.ai
-        elif hasattr(self, "parent") and callable(self.parent):
-            parent = self.parent()
-            if parent and hasattr(parent, "ai"):
-                ai_ref = parent.ai
-        # Walk up the widget tree if needed
-        if ai_ref is None:
-            widget = self
-            for _ in range(5):
-                if hasattr(widget, "ai"):
-                    ai_ref = widget.ai
-                    break
-                if hasattr(widget, "parent") and callable(widget.parent):
-                    widget = widget.parent()
-                    if widget is None: break
-        if ai_ref:
-            ai_ref.set_enabled(self._active_providers)
-        # ────────────────────────────────────────────────────────────────────
-
     def send_message(self):
         user_text=self.input_box.get().strip()
         if not user_text: return
@@ -2368,49 +2278,9 @@ class ChatOverlay(tk.Toplevel):
             routed = route_model(user_text, has_image=has_img, available_models=self.models)
         except:
             routed = self.model.get()
-        _enabled=[k for k,v in self._ai_enabled.items() if v]
-        threading.Thread(target=self._handle_message,args=(user_text,routed,ocr,screenshot,self.task_mode.get(),self._pipeline_stage,_enabled),daemon=True).start()
+        threading.Thread(target=self._handle_message,args=(user_text,routed,ocr,screenshot,self.task_mode.get()),daemon=True).start()
 
-    def _handle_message(self,user_text,model,ocr,screenshot,task_mode,pipeline_stage='chat',enabled_ais=None):
-        enabled_ais = enabled_ais or ['perplexity','chatgpt','gemini','grok']
-        # Route discuss/brainstorm to their own endpoints
-        if pipeline_stage in ('discuss','brainstorm') and not ocr and not screenshot:
-            import urllib.request as _ur, json as _jj
-            endpoint = 'http://localhost:59996/' + pipeline_stage
-            try:
-                pl = _jj.dumps({"message":user_text,"providers":enabled_ais}).encode()
-                req = _ur.Request(endpoint, data=pl, headers={"Content-Type":"application/json"})
-                with _ur.urlopen(req, timeout=120) as r:
-                    data = _jj.loads(r.read())
-                if pipeline_stage == 'discuss':
-                    parts = []
-                    for rnd_data in data.get('discussion',[]):
-                        parts.append("── Round " + str(rnd_data['round']) + " ──")
-                        for pid,text in rnd_data['responses'].items():
-                            e = {"perplexity":"🔍","chatgpt":"💬","gemini":"✦","grok":"𝕏","claude":"◆"}.get(pid,"●")
-                            parts.append("[" + e + " " + pid.upper() + "]\n" + text)
-                    result = "\n\n".join(parts)
-                else:  # brainstorm
-                    parts = ["── Ideas ──"]
-                    for pid,text in data.get('round1',{}).items():
-                        e = {"perplexity":"🔍","chatgpt":"💬","gemini":"✦","grok":"𝕏","claude":"◆"}.get(pid,"●")
-                        parts.append("[" + e + " " + pid.upper() + "]\n" + (text or ""))
-                    parts.append("\n── Refined ──")
-                    for pid,text in data.get('round2',{}).items():
-                        e = {"perplexity":"🔍","chatgpt":"💬","gemini":"✦","grok":"𝕏","claude":"◆"}.get(pid,"●")
-                        parts.append("[" + e + " " + pid.upper() + "]\n" + (text or ""))
-                    if data.get('synthesis'):
-                        parts.append("\n── Synthesis ──\n" + data['synthesis'])
-                    result = "\n\n".join(parts)
-                from ai import save_message
-                save_message("user", user_text, model=pipeline_stage)
-                save_message("ai", result, model=pipeline_stage)
-                self.after(0, lambda r=result: self.append_chat("ai", r))
-                return
-            except Exception as e:
-                self.after(0, lambda err=str(e): self.append_chat("system", f"[{pipeline_stage} error] {err}"))
-                return
-
+    def _handle_message(self,user_text,model,ocr,screenshot,task_mode):
         # Check browser commands first - instant, no AI needed
         try:
             from browser_control import handle_browser_command
@@ -2539,23 +2409,6 @@ class ChatOverlay(tk.Toplevel):
         self.chat_open  = False
         self.bubble_open = False
         self._build()
-
-        # ── Settings gear button ──────────────────────────────────────────────
-        try:
-            from echo_settings_panel import SettingsPanel
-            def _open_settings():
-                SettingsPanel(self)
-            self._gear_btn = tk.Button(
-                self, text="⚙", bg="#1a1a2e", fg="#888888",
-                font=("Segoe UI", 13), bd=0, padx=8, pady=4,
-                cursor="hand2", activebackground="#0f3460",
-                activeforeground="#ffffff", command=_open_settings
-            )
-            self._gear_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-2, y=2)
-            self._gear_btn.lift()
-        except Exception as _e:
-            print(f"[settings] gear button error: {_e}")
-        # ─────────────────────────────────────────────────────────────────────
         # Restore chat
         if chat_content.strip():
             self.after(400, lambda: self._restore_chat(chat_content))

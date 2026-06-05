@@ -4,11 +4,11 @@ Multi-model routing - picks the right model for each task type.
 from config import DEFAULT_MODEL
 
 ROUTING_RULES = {
-    "vision":   ["moondream", "llava"],      # has image
-    "long":     ["mistral", "gemma3"],       # long analysis
-    "fast":     ["gemma3"],                  # quick chat
-    "code":     ["mistral", "gemma3"],       # code tasks
-    "default":  ["gemma3", "mistral"],
+    "vision":   ["moondream", "llava"],           # has image
+    "long":     ["gemma3n-local", "qwen2.5"],     # long analysis
+    "fast":     ["qwen2.5"],                      # quick chat
+    "code":     ["gemma3n-local", "qwen2.5"],     # code tasks
+    "default":  ["qwen2.5", "gemma3n-local"],
 }
 
 def route_model(prompt, has_image=False, available_models=None):
@@ -39,5 +39,5 @@ def get_model_capabilities(model_name):
     return {
         "vision": any(v in m for v in ["moondream","llava","vision","bakllava"]),
         "fast":   any(v in m for v in ["gemma","phi","tiny"]),
-        "strong": any(v in m for v in ["mistral","llama","mixtral"]),
+        "strong": any(v in m for v in ["gemma3n","llama","mixtral"]),
     }

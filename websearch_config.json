@@ -1,10 +1,8 @@
 {
-  "backend_order": ["ddg_instant", "ddg_html"],
-  "searxng_url": "",
-  "timeout_seconds": 7,
-  "rate_limit_seconds": 1.5,
+  "backend_order": ["searxng", "ddg_instant", "ddg_html"],
+  "searxng_url": "http://localhost:8081",
+  "timeout_seconds": 6,
+  "rate_limit_seconds": 1.0,
   "cache_max_size": 64,
-  "cache_ttl_seconds": 300,
-  "max_results_in_prompt": 5,
-  "auto_search_in_pipeline": true
+  "cache_ttl_seconds": 300
 }

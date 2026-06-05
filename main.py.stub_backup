@@ -1,0 +1,17 @@
+from web_search import WebSearch
+import ai
+
+def run_assistant():
+    # Initialize the searcher
+    searcher = WebSearch()
+    
+    print("AI Assistant initialized with Search capabilities.")
+    
+    user_query = "What is the status of the current project?"
+    
+    # Call the AI function
+    response = ai.ask(prompt=user_query)
+    print(f"AI Response: {response}")
+
+if __name__ == "__main__":
+    run_assistant()
