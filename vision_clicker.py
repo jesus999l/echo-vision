@@ -73,9 +73,9 @@ def vision_click(target_description, model="moondream"):
     x, y = get_click_coords(screenshot, target_description, model)
     if x and y:
         print(f"Clicking at {x},{y}")
-        _run(f"ydotool mousemove -- {x} {y}")
+        _run(f"xdotool mousemove {x} {y}")
         time.sleep(0.2)
-        _run("ydotool click --button 1")
+        _run("xdotool click 1")
         return True, f"Clicked {target_description} at {x},{y}"
     return False, f"Could not find: {target_description}"
 
@@ -87,9 +87,9 @@ def vision_action(instruction, model="moondream"):
     screenshot = take_screenshot()
     x, y = get_click_coords(screenshot, instruction, model)
     if x and y:
-        _run(f"ydotool mousemove -- {x} {y}")
+        _run(f"xdotool mousemove {x} {y}")
         time.sleep(0.2)
-        _run("ydotool click --button 1")
+        _run("xdotool click 1")
         os.unlink(screenshot)
         return f"Done: clicked at {x},{y}"
     os.unlink(screenshot)
