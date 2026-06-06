@@ -14,7 +14,7 @@ BTN_HOVER  = "#2e2e4e"
 
 def _grab_desktop():
     tmp = tempfile.mktemp(prefix="vision_desk_", suffix=".png")
-    r = subprocess.run(["scrot", tmp], capture_output=True)
+    r = subprocess.run(["grim", tmp], capture_output=True)
     if r.returncode == 0 and os.path.exists(tmp):
         return tmp
     r2 = subprocess.run(["import", "-window", "root", tmp], capture_output=True)
