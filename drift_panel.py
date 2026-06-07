@@ -97,7 +97,7 @@ def wlr_focus(win):
                                  stderr=subprocess.DEVNULL)
         else:
             subprocess.Popen(
-                ["wlrctl", "toplevel", "focus", title],
+                ["wlrctl", "toplevel", "focus", f"title:{title}"],
                 stderr=subprocess.DEVNULL
             )
     except Exception:
@@ -118,7 +118,7 @@ def wlr_close(win):
                                  stderr=subprocess.DEVNULL)
         else:
             subprocess.Popen(
-                ["wlrctl", "toplevel", "close", title],
+                ["wlrctl", "toplevel", "close", f"title:{title}"],
                 stderr=subprocess.DEVNULL
             )
     except Exception:
