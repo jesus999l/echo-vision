@@ -27,8 +27,8 @@ PLANS        = VAULT / "Plans"
 LOG_FILE     = Path.home() / "vision_assistant" / "logs" / "echo_vault_watcher.log"
 
 OLLAMA_URL   = "http://127.0.0.1:11434/api/generate"
-DISTILL_MODEL = "qwen3:4b"        # fast distiller
-CLUSTER_MODEL = "qwen3:4b"    # for subject clustering
+DISTILL_MODEL = "qwen2.5:0.5b"        # fast distiller
+CLUSTER_MODEL = "qwen2.5:0.5b"    # for subject clustering
 
 CLUSTER_THRESHOLD = 3     # min files to trigger distillation
 DEBOUNCE_SECS     = 30    # wait after last file write before processing

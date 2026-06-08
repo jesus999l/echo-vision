@@ -63,7 +63,8 @@ _pa_instance     = None
 # ── FASTER-WHISPER ────────────────────────────────────────────────────────────
 def _load_whisper():
     global _whisper_model
-    if _whisper_model is None:
+    with _PROCESSING_LOCK:
+        if _whisper_model is None:
         from faster_whisper import WhisperModel
         print("[wake] Loading faster-whisper base.en (int8)...")
         _whisper_model = WhisperModel(
