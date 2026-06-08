@@ -4,8 +4,8 @@ Voice — Vosk STT + Piper TTS.
 import os, sys, json, queue, threading, subprocess, tempfile
 
 VOSK_MODEL_PATH = os.path.expanduser("~/vosk-model-small-en-us-0.15")
-PIPER_BIN   = os.path.expanduser("~/vision_env/bin/piper")
-PIPER_MODEL     = os.path.expanduser("~/Echo/AI/Voices/piper/models/en_US-lessac-medium.onnx")
+PIPER_BIN       = os.path.expanduser("~/piper/piper")
+PIPER_MODEL     = os.path.expanduser("~/piper/models/en_US-lessac-medium.onnx")
 
 _vosk_model = None
 
@@ -83,7 +83,7 @@ def speak(text, blocking=False):
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 wav_path = f.name
             proc = subprocess.run(
-                [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path, "--length_scale", "1.05", "--noise_scale", "1.10", "--noise_w", "1.20"],
+                [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path],
                 input=text.encode(), capture_output=True
             )
             if proc.returncode == 0:
@@ -116,7 +116,7 @@ def _tts_sentence(text):
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             wav_path = f.name
         proc = subprocess.run(
-            [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path, "--length_scale", "1.05", "--noise_scale", "1.10", "--noise_w", "1.20"],
+            [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path],
             input=text.encode(), capture_output=True
         )
         if proc.returncode == 0:
@@ -147,11 +147,4 @@ def speak_stream(sentence_iter):
             s = s.strip()
             if s:
                 _tts_queue.put(s)
-                try:
-                    open("/tmp/echo_bubble.txt", "w").write(s)
-                except Exception:
-                    pass
-        import time; time.sleep(6)
-        try: open("/tmp/echo_bubble.txt", "w").write("")
-        except: pass
     threading.Thread(target=_feed, daemon=True).start()

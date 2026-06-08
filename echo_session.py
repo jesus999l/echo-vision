@@ -145,3 +145,14 @@ if __name__ == "__main__":
         daemon_mode()
     else:
         print("Usage: echo_session.py [save|restore|speak TEXT|daemon]")
+
+def run_hourly_sync():
+    """Automated cyclical environment mapping stub"""
+    import time
+    while True:
+        try:
+            save_session()
+            print("[session] Cyclical hourly checkpoint written successfully.")
+        except Exception as e:
+            print(f"[session] Backup loop non-fatal fault: {e}")
+        time.sleep(3600)

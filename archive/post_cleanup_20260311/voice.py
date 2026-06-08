@@ -4,8 +4,8 @@ Voice — Vosk STT + Piper TTS.
 import os, sys, json, queue, threading, subprocess, tempfile
 
 VOSK_MODEL_PATH = os.path.expanduser("~/vosk-model-small-en-us-0.15")
-PIPER_BIN   = os.path.expanduser("~/vision_env/bin/piper")
-PIPER_MODEL     = os.path.expanduser("~/Echo/AI/Voices/piper/models/en_US-lessac-medium.onnx")
+PIPER_BIN       = os.path.expanduser("~/piper/piper")
+PIPER_MODEL     = os.path.expanduser("~/piper/models/en_US-lessac-medium.onnx")
 
 _vosk_model = None
 
@@ -83,7 +83,7 @@ def speak(text, blocking=False):
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 wav_path = f.name
             proc = subprocess.run(
-                [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path, "--length_scale", "1.05", "--noise_scale", "1.10", "--noise_w", "1.20"],
+                [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path],
                 input=text.encode(), capture_output=True
             )
             if proc.returncode == 0:
@@ -97,61 +97,3 @@ def speak(text, blocking=False):
         _speak()
     else:
         threading.Thread(target=_speak, daemon=True).start()
-
-# ── STREAMING TTS ─────────────────────────────────────────────────────────────
-_tts_queue   = queue.Queue()
-_tts_started = False
-
-def _tts_sentence(text):
-    """Render and play one sentence, blocking."""
-    text = text.strip()
-    if not text: return
-    if not piper_available():
-        try:
-            subprocess.run(["espeak-ng", "-s", "150", text],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except: pass
-        return
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            wav_path = f.name
-        proc = subprocess.run(
-            [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path, "--length_scale", "1.05", "--noise_scale", "1.10", "--noise_w", "1.20"],
-            input=text.encode(), capture_output=True
-        )
-        if proc.returncode == 0:
-            subprocess.run(["aplay", "-q", wav_path],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        os.unlink(wav_path)
-    except Exception as e:
-        print(f"[voice] TTS error: {e}")
-
-def _tts_worker():
-    while True:
-        item = _tts_queue.get()
-        if item is None: break
-        _tts_sentence(item)
-        _tts_queue.task_done()
-
-def _ensure_tts_worker():
-    global _tts_started
-    if not _tts_started:
-        _tts_started = True
-        threading.Thread(target=_tts_worker, daemon=True).start()
-
-def speak_stream(sentence_iter):
-    """Speak sentences from iterator as they arrive — first word in ~0.8s."""
-    _ensure_tts_worker()
-    def _feed():
-        for s in sentence_iter:
-            s = s.strip()
-            if s:
-                _tts_queue.put(s)
-                try:
-                    open("/tmp/echo_bubble.txt", "w").write(s)
-                except Exception:
-                    pass
-        import time; time.sleep(6)
-        try: open("/tmp/echo_bubble.txt", "w").write("")
-        except: pass
-    threading.Thread(target=_feed, daemon=True).start()

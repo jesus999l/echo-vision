@@ -6,7 +6,6 @@ import os, sys, json, threading, subprocess, time, re, tempfile, wave
 sys.path.insert(0, os.path.expanduser("~/vision_assistant"))
 
 VOSK_MODEL_PATH = os.path.expanduser("~/vosk-model-small-en-us-0.15")
-_vosk_cmd_model = None
 VA_PYTHON       = "/home/jesus999l/vision_env/bin/python"
 VA_MAIN         = "/home/jesus999l/vision_assistant/main.py"
 def get_mic_device():
@@ -36,22 +35,8 @@ def get_mic_device():
     return None
 
 MIC_DEVICE = get_mic_device()
-# Override: pipewire device has correct BT mic routing
-try:
-    import pyaudio as _pa
-    _p = _pa.PyAudio()
-    for _i in range(_p.get_device_count()):
-        _d = _p.get_device_info_by_index(_i)
-        if _d["maxInputChannels"] > 0 and "pipewire" in _d["name"].lower():
-            MIC_DEVICE = _i
-            print(f"[mic] PipeWire override: device {_i}")
-            break
-    _p.terminate()
-except Exception:
-    pass
 COOLDOWN        = 3.0
 COMMAND_TIMEOUT = 6
-_PROCESSING_LOCK = __import__("threading").Lock()
 WAKE_PHRASES    = ["hey echo", "echo wake", "wake up echo"]
 
 _running        = False
@@ -64,26 +49,18 @@ _pa_instance     = None
 # ── FASTER-WHISPER ────────────────────────────────────────────────────────────
 def _load_whisper():
     global _whisper_model
-    with _PROCESSING_LOCK:
-        if _whisper_model is None:
-            from faster_whisper import WhisperModel
-            print("[wake] Loading faster-whisper base.en (int8)...")
-            _whisper_model = WhisperModel(
-                'base.en', 
-                local_files_only=True, 
-                device='cpu', 
-                compute_type='int8',
-                num_workers=2,
-                cpu_threads=4
-            )
-            print("[wake] Whisper ready.")
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+        print("[wake] Loading faster-whisper base.en (int8)...")
+        _whisper_model = WhisperModel(
+            "base.en", device="cpu", compute_type="int8",
+            num_workers=2, cpu_threads=4,
+        )
+        print("[wake] Whisper ready.")
     return _whisper_model
+
 def _transcribe_whisper(audio_path):
     try:
-        if os.path.exists(audio_path):
-            print(f"[wake-diagnostic] File target size: {os.path.getsize(audio_path)} bytes")
-        else:
-            print("[wake-diagnostic] CRITICAL: Audio target file does not exist!")
         m = _load_whisper()
         segs, info = m.transcribe(
             audio_path, language="en",
@@ -101,33 +78,6 @@ def _transcribe_whisper(audio_path):
         return text
     except Exception as e:
         print(f"[wake] whisper error: {e}")
-        return ""
-
-def _transcribe_vosk(audio_path):
-    global _vosk_cmd_model
-    try:
-        if not os.path.exists(audio_path):
-            print("[wake-diagnostic] CRITICAL: Audio target file does not exist!")
-            return ""
-        print(f"[wake-diagnostic] File target size: {os.path.getsize(audio_path)} bytes")
-        from vosk import Model, KaldiRecognizer
-        import wave
-        if _vosk_cmd_model is None:
-            _vosk_cmd_model = Model(VOSK_MODEL_PATH)
-        model = _vosk_cmd_model
-        rec = KaldiRecognizer(model, 16000)
-        rec.SetWords(False)
-        with wave.open(audio_path, "rb") as wf:
-            while True:
-                data = wf.readframes(4096)
-                if not data: break
-                rec.AcceptWaveform(data)
-        result = json.loads(rec.FinalResult())
-        text = result.get("text", "").strip().lower()
-        print(f"[wake] transcribed: {text!r}")
-        return text
-    except Exception as e:
-        print(f"[wake] vosk transcribe error: {e}")
         return ""
 
 # ── VOICE FINGERPRINT (multi-user) ───────────────────────────────────────────
@@ -270,7 +220,7 @@ def _record_command(pa, seconds=COMMAND_TIMEOUT):
 
     try:
         import webrtcvad
-        vad = webrtcvad.Vad(1)   # aggressiveness 0-3 (1 = better for BT mic)
+        vad = webrtcvad.Vad(2)   # aggressiveness 0-3 (2 = balanced)
         use_vad = True
     except ImportError:
         use_vad = False
@@ -283,7 +233,7 @@ def _record_command(pa, seconds=COMMAND_TIMEOUT):
 
     # Wait up to 3s for speech onset
     speech_started = False
-    deadline = time.time() + 5.0
+    deadline = time.time() + 3.0
     buf = b""
     while time.time() < deadline:
         chunk = stream.read(FRAME_BYTES, exception_on_overflow=False)
@@ -303,7 +253,7 @@ def _record_command(pa, seconds=COMMAND_TIMEOUT):
 
     if speech_started:
         silence_frames = 0
-        MAX_SILENCE = 20  # 20 × 20ms = 400ms of silence → stop
+        MAX_SILENCE = 8   # 8 × 20ms = 160ms of silence → stop
         max_frames = int(1000 / FRAME_MS * seconds)
         buf = b""
         for _ in range(max_frames):
@@ -370,27 +320,15 @@ def _notify(msg):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except: pass
 
-_SPEAK_MUTEX = __import__("threading").RLock()
-
 def speak(text):
     try:
-        open("/tmp/echo_bubble.txt", "w").write(str(text))
-        import threading
-        def _clear():
-            import time; time.sleep(6)
-            try: open("/tmp/echo_bubble.txt", "w").write("")
-            except: pass
-        threading.Thread(target=_clear, daemon=False).start()
-    except: pass
-    with _SPEAK_MUTEX:
+        from voice import speak as _speak
+        _speak(text)
+    except:
         try:
-            from voice import speak as _speak
-            _speak(text)
-        except:
-            try:
-                subprocess.Popen(["espeak", "-s", "150", text],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except: pass
+            subprocess.Popen(["espeak", "-s", "150", text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except: pass
 
 # ── ACTIONS ───────────────────────────────────────────────────────────────────
 def _open_vision():
@@ -646,8 +584,7 @@ def _stream_voice_response(question, full_context=False):
     full path:  light system prompt + memory context, max_tokens=200
     """
     import requests as _req, json as _json
-    LLM_URL = "http://localhost:3210/v1/chat/completions"
-    DEFAULT_MODEL = "perplexity"
+    from config import LLM_URL, DEFAULT_MODEL
 
     messages = []
 
@@ -736,8 +673,6 @@ def _ask_ai(question):
                     first = s
                     _notify(s[:120])
                 collected.append(s)
-                try: open("/tmp/echo_bubble.txt", "w").write(" ".join(collected))
-                except: pass
                 yield s
         speak_stream(_with_notify(gen))
         # Send full response to UI chat
@@ -1036,7 +971,7 @@ def run_detector(status_cb=None):
 
     global _pa_instance
     _pa_instance = pa
-    #     threading.Timer(8.0, _load_whisper).start()  # pre-warm after Vosk fully loaded
+    threading.Timer(8.0, _load_whisper).start()  # pre-warm after Vosk fully loaded
 
     rec = KaldiRecognizer(model, 16000)
     rec.SetWords(False)
@@ -1077,7 +1012,6 @@ def run_detector(status_cb=None):
                 else:
                     route_command(inline)
                 _unduck_audio()
-                stream = _make_stream(pa); stream.start_stream()
             else:
                 print("[wake] Listening for command...")
                 audio_path = _record_command(pa)
@@ -1086,7 +1020,7 @@ def run_detector(status_cb=None):
                     _unduck_audio()
                     stream = _make_stream(pa); stream.start_stream()
                     continue
-                cmd = _transcribe_vosk(audio_path)
+                cmd = _transcribe_whisper(audio_path)
                 _unduck_audio()
                 try: os.unlink(audio_path)
                 except: pass
@@ -1102,7 +1036,6 @@ def run_detector(status_cb=None):
                     route_command(cmd)
                 else:
                     print("[wake] No command heard")
-                stream = _make_stream(pa); stream.start_stream()
 
             rec = KaldiRecognizer(model, 16000)
             rec.SetWords(False)
