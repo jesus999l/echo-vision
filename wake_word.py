@@ -335,10 +335,13 @@ def _notify(msg):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except: pass
 
+_SPEAK_MUTEX = __import__("threading").RLock()
+
 def speak(text):
-    try:
-        from voice import speak as _speak
-        _speak(text)
+    with _SPEAK_MUTEX:
+        try:
+            from voice import speak as _speak
+            _speak(text)
     except:
         try:
             subprocess.Popen(["espeak", "-s", "150", text],
@@ -1028,6 +1031,7 @@ def run_detector(status_cb=None):
                 else:
                     route_command(inline)
                 _unduck_audio()
+                stream = _make_stream(pa); stream.start_stream()
             else:
                 print("[wake] Listening for command...")
                 audio_path = _record_command(pa)
@@ -1052,6 +1056,7 @@ def run_detector(status_cb=None):
                     route_command(cmd)
                 else:
                     print("[wake] No command heard")
+                stream = _make_stream(pa); stream.start_stream()
 
             rec = KaldiRecognizer(model, 16000)
             rec.SetWords(False)
