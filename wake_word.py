@@ -65,15 +65,14 @@ def _load_whisper():
     global _whisper_model
     with _PROCESSING_LOCK:
         if _whisper_model is None:
-        from faster_whisper import WhisperModel
-        print("[wake] Loading faster-whisper base.en (int8)...")
-        _whisper_model = WhisperModel(
-            "base.en", device="cpu", compute_type="int8",
-            num_workers=2, cpu_threads=4,
-        )
-        print("[wake] Whisper ready.")
+            from faster_whisper import WhisperModel
+            print("[wake] Loading faster-whisper base.en (int8)...")
+            _whisper_model = WhisperModel(
+                "base.en", device="cpu", compute_type="int8",
+                num_workers=2, cpu_threads=4,
+            )
+            print("[wake] Whisper ready.")
     return _whisper_model
-
 def _transcribe_whisper(audio_path):
     try:
         m = _load_whisper()
@@ -342,11 +341,11 @@ def speak(text):
         try:
             from voice import speak as _speak
             _speak(text)
-    except:
-        try:
-            subprocess.Popen(["espeak", "-s", "150", text],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except: pass
+        except:
+            try:
+                subprocess.Popen(["espeak", "-s", "150", text],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except: pass
 
 # ── ACTIONS ───────────────────────────────────────────────────────────────────
 def _open_vision():
@@ -1032,6 +1031,7 @@ def run_detector(status_cb=None):
                     route_command(inline)
                 _unduck_audio()
                 stream = _make_stream(pa); stream.start_stream()
+                stream = _make_stream(pa); stream.start_stream()
             else:
                 print("[wake] Listening for command...")
                 audio_path = _record_command(pa)
@@ -1056,6 +1056,7 @@ def run_detector(status_cb=None):
                     route_command(cmd)
                 else:
                     print("[wake] No command heard")
+                stream = _make_stream(pa); stream.start_stream()
                 stream = _make_stream(pa); stream.start_stream()
 
             rec = KaldiRecognizer(model, 16000)
