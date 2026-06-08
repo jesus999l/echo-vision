@@ -722,6 +722,8 @@ def _stream_voice_response(question, full_context=False):
 def _ask_ai(question):
     try:
         _notify("💭 Echo...")
+        try: open("/tmp/echo_bubble.txt", "w").write("💭 ...")
+        except: pass
         full = _needs_full_context(question)
         mode = "full" if full else "fast"
         print(f"[wake] AI {mode}: {question!r}")
@@ -738,6 +740,7 @@ def _ask_ai(question):
                 collected.append(s)
                 try: open("/tmp/echo_bubble.txt", "w").write(" ".join(collected))
                 except: pass
+                print(f"[bubble] wrote: {s[:50]!r}")
                 yield s
         speak_stream(_with_notify(gen))
         # Send full response to UI chat
@@ -1080,6 +1083,8 @@ def run_detector(status_cb=None):
                 stream = _make_stream(pa); stream.start_stream()
             else:
                 print("[wake] Listening for command...")
+                try: open("/tmp/echo_bubble.txt", "w").write("...")
+                except: pass
                 audio_path = _record_command(pa)
                 if audio_path is None:
                     # Voice rejected

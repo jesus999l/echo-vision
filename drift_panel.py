@@ -393,6 +393,18 @@ class EchoChatWidget(Gtk.Box):
         row.pack_end(send_btn, False, False, 0)
         row.pack_end(mic_btn, False, False, 0)
         self.pack_start(row, False, False, 0)
+        # Quick launch row
+        launch_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        launch_row.set_margin_top(6)
+        upd_btn = Gtk.Button(label="🔄 Updates")
+        upd_btn.get_style_context().add_class("echo-send")
+        upd_btn.connect("clicked", lambda *_: __import__('subprocess').Popen(["update-manager"]))
+        echo_btn = Gtk.Button(label="🤖 Echo")
+        echo_btn.get_style_context().add_class("echo-send")
+        echo_btn.connect("clicked", lambda *_: __import__('subprocess').Popen(["/home/jesus999l/vision_env/bin/python3", "/home/jesus999l/vision_assistant/main.py", "--ui"]))
+        launch_row.pack_start(upd_btn, True, True, 0)
+        launch_row.pack_start(echo_btn, True, True, 0)
+        self.pack_start(launch_row, False, False, 0)
 
     def _send(self, *_):
         msg = self.entry.get_text().strip()
