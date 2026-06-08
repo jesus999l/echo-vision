@@ -5,12 +5,12 @@ DB_PATH         = os.path.join(BASE_DIR, "memory.db")
 SCREENSHOT_PATH = "/tmp/vision_capture.png"
 
 OLLAMA_BASE     = "http://127.0.0.1:11434"
-# LLM_URL set dynamically below — proxima if running, ollama as fallback
+LLM_URL         = f"{OLLAMA_BASE}/v1/chat/completions"
 MODELS_URL      = f"{OLLAMA_BASE}/v1/models"
 VISION_API_URL  = f"{OLLAMA_BASE}/api/chat"
 
 VISION_MODELS   = ["llava", "moondream", "vision", "bakllava"]
-DEFAULT_MODEL   = "qwen2.5:0.5b"
+DEFAULT_MODEL   = "gemma3:latest"
 
 IPC_HOST  = "127.0.0.1"
 IPC_PORT  = 59999
@@ -23,23 +23,3 @@ CLOUD_SYNC_URL = ""
 USER_NAME     = ""
 USER_GOALS    = []
 USER_TIMEZONE = ""
-
-# ── Echo Proxima Native ───────────────────────────────────────────────────────
-# Browser-based multi-AI proxy (Claude, ChatGPT, Gemini, Perplexity, Grok)
-# Runs on :3210, OpenAI-compatible. Start: python3 ~/vision_assistant/echo_proxima_native.py
-PROXIMA_URL     = "http://localhost:3210/v1/chat/completions"
-PROXIMA_MODELS  = "http://localhost:3210/v1/models"
-PROXIMA_STATUS  = "http://localhost:3210/status"
-PROXIMA_DEFAULT = "auto"   # auto | claude | chatgpt | gemini | perplexity | grok
-
-def _proxima_alive():
-    import urllib.request
-    try:
-        urllib.request.urlopen("http://localhost:3210/", timeout=1)
-        return True
-    except:
-        return False
-# Smart LLM_URL: use Proxima if running, fallback to Ollama
-import os as _os
-LLM_URL = PROXIMA_URL  # Proxima v4.1.0 confirmed working
-# ─────────────────────────────────────────────────────────────────────────────

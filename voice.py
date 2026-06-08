@@ -147,13 +147,4 @@ def speak_stream(sentence_iter):
             s = s.strip()
             if s:
                 _tts_queue.put(s)
-                # Write to Echo speech bubble
-                try:
-                    open("/tmp/echo_bubble.txt", "w").write(s)
-                except Exception:
-                    pass
-        # Clear bubble after stream ends
-        import time; time.sleep(6)
-        try: open("/tmp/echo_bubble.txt", "w").write("")
-        except: pass
     threading.Thread(target=_feed, daemon=True).start()

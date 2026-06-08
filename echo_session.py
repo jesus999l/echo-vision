@@ -89,14 +89,11 @@ def echo_speak(text):
     except Exception as e:
         print(f"[session] TTS error: {e}")
     print(f"[Echo] {text}")
-    # Auto-clear bubble after 5s (background, non-daemon so it completes)
-    def _clear():
-        time.sleep(5)
-        try:
-            open(BUBBLE_FILE, 'w').write("")
-        except Exception:
-            pass
-    threading.Thread(target=_clear, daemon=False).start()
+    # Auto-clear bubble after 5s via background process (survives parent exit)
+    subprocess.Popen(
+        ['bash', '-c', 'sleep 5 && echo -n > /tmp/echo_bubble.txt'],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
 
 def daemon_mode():
     """Watch driftwm process; auto-save every 30s, auto-restore on crash."""

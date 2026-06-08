@@ -35,8 +35,22 @@ def get_mic_device():
     return None
 
 MIC_DEVICE = get_mic_device()
+# Override: pipewire device has correct BT mic routing
+try:
+    import pyaudio as _pa
+    _p = _pa.PyAudio()
+    for _i in range(_p.get_device_count()):
+        _d = _p.get_device_info_by_index(_i)
+        if _d["maxInputChannels"] > 0 and "pipewire" in _d["name"].lower():
+            MIC_DEVICE = _i
+            print(f"[mic] PipeWire override: device {_i}")
+            break
+    _p.terminate()
+except Exception:
+    pass
 COOLDOWN        = 3.0
 COMMAND_TIMEOUT = 6
+_PROCESSING_LOCK = __import__("threading").Lock()
 WAKE_PHRASES    = ["hey echo", "echo wake", "wake up echo"]
 
 _running        = False
@@ -51,9 +65,9 @@ def _load_whisper():
     global _whisper_model
     if _whisper_model is None:
         from faster_whisper import WhisperModel
-        print("[wake] Loading faster-whisper small.en (int8)...")
+        print("[wake] Loading faster-whisper base.en (int8)...")
         _whisper_model = WhisperModel(
-            "small.en", device="cpu", compute_type="int8",
+            "base.en", device="cpu", compute_type="int8",
             num_workers=2, cpu_threads=4,
         )
         print("[wake] Whisper ready.")
@@ -65,7 +79,7 @@ def _transcribe_whisper(audio_path):
         segs, info = m.transcribe(
             audio_path, language="en",
             vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 500},
+            vad_parameters={"min_silence_duration_ms": 300},
             condition_on_previous_text=False,
             temperature=0.0,
             beam_size=1,
@@ -220,7 +234,7 @@ def _record_command(pa, seconds=COMMAND_TIMEOUT):
 
     try:
         import webrtcvad
-        vad = webrtcvad.Vad(2)   # aggressiveness 0-3 (2 = balanced)
+        vad = webrtcvad.Vad(1)   # aggressiveness 0-3 (1 = better for BT mic)
         use_vad = True
     except ImportError:
         use_vad = False
@@ -233,7 +247,7 @@ def _record_command(pa, seconds=COMMAND_TIMEOUT):
 
     # Wait up to 3s for speech onset
     speech_started = False
-    deadline = time.time() + 3.0
+    deadline = time.time() + 5.0
     buf = b""
     while time.time() < deadline:
         chunk = stream.read(FRAME_BYTES, exception_on_overflow=False)
@@ -253,7 +267,7 @@ def _record_command(pa, seconds=COMMAND_TIMEOUT):
 
     if speech_started:
         silence_frames = 0
-        MAX_SILENCE = 20   # 8 × 20ms = 160ms of silence → stop
+        MAX_SILENCE = 20  # 20 × 20ms = 400ms of silence → stop
         max_frames = int(1000 / FRAME_MS * seconds)
         buf = b""
         for _ in range(max_frames):
@@ -321,16 +335,6 @@ def _notify(msg):
     except: pass
 
 def speak(text):
-    try:
-        # Write to Echo speech bubble
-        open("/tmp/echo_bubble.txt", "w").write(str(text))
-        import threading
-        def _clear():
-            import time; time.sleep(6)
-            try: open("/tmp/echo_bubble.txt", "w").write("")
-            except: pass
-        threading.Thread(target=_clear, daemon=False).start()
-    except: pass
     try:
         from voice import speak as _speak
         _speak(text)
@@ -594,7 +598,8 @@ def _stream_voice_response(question, full_context=False):
     full path:  light system prompt + memory context, max_tokens=200
     """
     import requests as _req, json as _json
-    from config import LLM_URL, DEFAULT_MODEL
+    LLM_URL = "http://localhost:3210/v1/chat/completions"
+    DEFAULT_MODEL = "perplexity"
 
     messages = []
 

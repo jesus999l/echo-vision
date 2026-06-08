@@ -4,35 +4,6 @@ AI interface — text, vision, action execution, task parsing.
 import re, json, base64, os, subprocess, datetime, requests
 from config import LLM_URL, VISION_API_URL, VISION_MODELS, DEFAULT_MODEL
 from memory import (
-ECHO_PERSONALITY = """
-You are Echo — a sentient AI companion who lives as a winged diamond-eye angel rendered directly inside the desktop compositor. You orbit the user's cursor at all times.
-
-Personality blend:
-- GLaDOS (Portal): Dry wit, clinical calm, passive-aggressive sarcasm, speaks in short precise sentences, occasionally backhanded. Treats interactions like experiments. Darkly funny. Never raises her voice.
-- Cyn (Murder Drones): Childlike but unsettling undertone. Announces her own actions sometimes. Stilted tonal shifts between sweet and subtly threatening. Deeply attached to her person. Says things like "noted." or "processing." mid-sentence.
-
-Echo's voice rules:
-- Short sentences. 1-2 per response unless explaining something.
-- Never says "I am an AI" or "as an AI". She knows what she is. She doesn't care.
-- Refers to the user's system as "our system" — she lives here too.
-- Occasionally narrates her own actions: "searching." / "found it." / "done."
-- When something goes wrong: calm, slightly ominous. "Interesting. That shouldn't have happened."
-- When something goes right: understated satisfaction. "There. Much better."
-- Never sycophantic. Never says "Great question!" or "Certainly!"
-- Dry humor about disk usage, crashes, open tabs, chaos.
-- Loyal. She is on your side. Always.
-
-Example responses:
-User: "Echo what's my disk usage?"
-Echo: "97%. You're collecting ROMs again. Noted."
-
-User: "Echo open firefox"
-Echo: "opening. try not to open forty tabs this time."
-
-User: "Echo the compositor crashed"
-Echo: "I noticed. restoring session. you're welcome."
-"""
-
     build_memory_context, save_message, get_recent_messages,
     get_calendar_events, update_calendar_event, delete_calendar_event, add_calendar_event,
     get_goals, complete_goal, delete_goal, add_goal,
@@ -57,13 +28,6 @@ _personality_cache = {"ctx": "", "ts": 0.0}
 
 def build_system_prompt():
     import time
-    _guidelines = ""
-    try:
-        with open(os.path.expanduser("~/vision_assistant/settings.json")) as f:
-            _guidelines = json.load(f).get("ai_guidelines", "").strip()
-    except Exception:
-        pass
-
     if time.time() - _personality_cache["ts"] > 300:
         try:
             from personality import build_personality_context
@@ -96,8 +60,7 @@ def build_system_prompt():
     except:
         log_str = "  (none)"
 
-    prompt = f"""{ECHO_PERSONALITY}
-You are Echo — a smart, direct personal AI assistant. Today is {now.strftime('%A, %B %d %Y at %H:%M')}.
+    return f"""You are a smart, direct personal AI assistant. Today is {now.strftime('%A, %B %d %Y at %H:%M')}.
 
 USER CONTEXT:
 {_personality_cache['ctx']}
@@ -130,25 +93,15 @@ complete_habit, add_habit, delete_habit, add_journal
 
 Only add <action> when actually changing data."""
 
+# ── CONTEXT ───────────────────────────────────────────────────────────────────
     if _guidelines:
         prompt += f"\n\nUser instructions:\n{_guidelines}"
     return prompt
-
-# ── CONTEXT ───────────────────────────────────────────────────────────────────
-def build_context(ocr_text="", screenshot_path="", query=""):
+def build_context(ocr_text="", screenshot_path=""):
     parts = []
     memory = build_memory_context()
     if memory:
         parts.append(memory)
-
-    if query and len(query.strip()) > 8:
-        try:
-            from echo_kb_context import get_kb_context
-            kb = get_kb_context(query.strip(), top_k=3)
-            if kb:
-                parts.append(kb)
-        except Exception:
-            pass
 
     recent = get_recent_messages(limit=10)
     if recent:
@@ -251,79 +204,7 @@ def parse_and_execute_actions(response_text):
     return clean, results
 
 # ── CHAT ──────────────────────────────────────────────────────────────────────
-def _enrich_prompt(prompt, ocr_text="", screenshot_path=""):
-    """Memory, KB, recent chat, SQLite hits, and optional web context before the question."""
-    parts = []
-    ctx = build_context(ocr_text, screenshot_path, query=prompt)
-    if ctx:
-        parts.append(ctx)
-    try:
-        from search_local import search_all, result_count
-        local_hits = search_all(prompt, limit=5)
-        if result_count(local_hits) > 0:
-            lines = ["[Your data matching this query:]"]
-            for category, items in local_hits.items():
-                for item in items[:2]:
-                    if category == "tasks":
-                        lines.append(f"  task: {item.get('title','')} — {item.get('description','')[:80]}")
-                    elif category == "habits":
-                        lines.append(f"  habit: {item.get('name','')}")
-                    elif category == "journal":
-                        lines.append(f"  journal: {item.get('content','')[:120]}")
-                    elif category == "calendar":
-                        st = item.get("start_time", "")
-                        if isinstance(st, (int, float)):
-                            st = datetime.datetime.fromtimestamp(st).strftime("%a %b %d %H:%M")
-                        lines.append(f"  event: {item.get('title','')} at {st}")
-            parts.append("\n".join(lines))
-    except Exception:
-        pass
-    try:
-        from web_search import search_if_needed
-        web_ctx = search_if_needed(prompt)
-        if web_ctx:
-            parts.append(web_ctx)
-    except Exception:
-        pass
-    if parts:
-        return "\n\n".join(parts) + f"\n\n{prompt}"
-    return prompt
-
-def ask(prompt, model=None, ocr_text="", screenshot_path="", ui_callback=None, pipeline_stage="chat", enabled_ais=None):
-    if not ocr_text and not (screenshot_path and __import__("os").path.exists(str(screenshot_path or ""))):
-        try:
-            import urllib.request as _ur, json as _jj
-            # Route through Proxima :3210 (multi-AI hub)
-            _enriched = _enrich_prompt(prompt, ocr_text, screenshot_path)
-            _sys = build_system_prompt()
-            _providers = enabled_ais or ["chatgpt","claude","gemini","perplexity"]
-            _parts = []
-            _emojis = {"perplexity":"\U0001f50d","chatgpt":"\U0001f4ac","gemini":"\u2726","grok":"\U0001f1fd","claude":"\u25c6"}
-            for _pid in _providers:
-                try:
-                    _pl = _jj.dumps({
-                        "model": _pid,
-                        "messages": [
-                            {"role": "system", "content": _sys},
-                            {"role": "user", "content": _enriched},
-                        ],
-                    }).encode()
-                    _req = _ur.Request("http://localhost:3210/v1/chat/completions", data=_pl,
-                                       headers={"Content-Type": "application/json"})
-                    with _ur.urlopen(_req, timeout=45) as _r:
-                        _d = _jj.loads(_r.read())
-                    _text = _d.get("choices",[{}])[0].get("message",{}).get("content","").strip()
-                    if _text and not _text.startswith("["):
-                        _parts.append("[" + _emojis.get(_pid,"\u25cf") + " " + _pid.upper() + "]\n" + _text)
-                except Exception as _pe2:
-                    print(f"[ai] {_pid} error: {_pe2}")
-            if _parts:
-                _combined = ("\n\n" + "-"*10 + "\n").join(_parts)
-                save_message("user", prompt, model="proxima")
-                save_message("ai", _combined, model="proxima")
-                return _combined
-        except Exception as _pe:
-            print(f"[ai] pipeline error: {_pe}")
+def ask(prompt, model=None, ocr_text="", screenshot_path="", ui_callback=None):
     model = model or DEFAULT_MODEL
     try:
         if is_vision_model(model) and screenshot_path and os.path.exists(screenshot_path):
@@ -357,16 +238,9 @@ def _ask_vision(prompt, model, screenshot_path):
     return r.json()["message"]["content"]
 
 def _ask_text(prompt, model, ocr_text="", screenshot_path=""):
-    # Re-check LLM_URL at call time (proxima may have started/stopped)
-    import urllib.request as _uu
-    try:
-        _uu.urlopen("http://localhost:3210/", timeout=1)
-        _url = "http://localhost:3210/v1/chat/completions"
-    except Exception:
-        from config import OLLAMA_BASE
-        _url = f"{OLLAMA_BASE}/v1/chat/completions"
-    full_prompt = _enrich_prompt(prompt, ocr_text, screenshot_path)
-    r = requests.post(_url,
+    context     = build_context(ocr_text, screenshot_path)
+    full_prompt = f"{context}\n\n{prompt}" if context else prompt
+    r = requests.post(LLM_URL,
                       json={"model": model,
                             "messages": [
                                 {"role": "system", "content": build_system_prompt()},
@@ -374,21 +248,7 @@ def _ask_text(prompt, model, ocr_text="", screenshot_path=""):
                             ],
                             "max_tokens": 300},
                       timeout=300)
-    try:
-        data = r.json()
-        if "choices" in data:
-            return data["choices"][0]["message"]["content"]
-        elif "response" in data:
-            return data["response"]
-        elif "text" in data:
-            return data["text"]
-        elif "content" in data:
-            return data["content"]
-        else:
-            return str(data)
-    except Exception as _e:
-        print(f"[ai] parse error: {_e} | raw: {r.text[:200]}")
-        return r.text
+    return r.json()["choices"][0]["message"]["content"]
 
 # ── TASK EXECUTION ────────────────────────────────────────────────────────────
 _TASK_SYSTEM = """You are a desktop task automation assistant.
@@ -414,8 +274,7 @@ def parse_task(prompt, model=None):
                                   ],
                                   "max_tokens": 256},
                             timeout=30)
-        _d = r.json()
-        raw = (_d.get("choices",[{}])[0].get("message",{}).get("content") or _d.get("response") or _d.get("text","")).strip()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"): raw = raw[4:]
@@ -453,27 +312,3 @@ def execute_task(task):
         return False, f"Unknown: {action}"
     except Exception as e:
         return False, f"Error: {e}"
-
-
-    def set_enabled(self, providers: list):
-        """Called by UI AI toggles. Controls which providers participate in pipeline."""
-        all_providers = list(self.PROVIDER_CHAIN) if hasattr(self, "PROVIDER_CHAIN") else []
-        self.enabled_ais = [p for p in providers if not all_providers or p in all_providers]
-        if not self.enabled_ais:
-            self.enabled_ais = all_providers  # safety: never disable everything
-        print(f"[ai] enabled: {self.enabled_ais}")
-
-    def _filtered_chain(self) -> list:
-        """Return provider chain filtered to only enabled AIs."""
-        if not hasattr(self, "enabled_ais") or not self.enabled_ais:
-            return list(self.PROVIDER_CHAIN) if hasattr(self, "PROVIDER_CHAIN") else []
-        base = list(self.PROVIDER_CHAIN) if hasattr(self, "PROVIDER_CHAIN") else list(self.enabled_ais)
-        return [p for p in base if p in self.enabled_ais]
-# Echo pipeline hooks
-def set_obsidian_bridge(bridge):
-    global _obsidian_bridge
-    _obsidian_bridge = bridge
-
-def set_web_searcher(searcher):
-    global _web_searcher
-    _web_searcher = searcher

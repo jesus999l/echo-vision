@@ -1,7 +1,6 @@
 """
 Vision Assistant — entry point.
 """
-from event_router import router
 import tkinter as tk
 import threading, socket, json, sys, os, shutil, glob, time
 
@@ -110,108 +109,6 @@ class VisionApp:
         self.root.withdraw()
         self.chat_window  = None
 
-        # ── Obsidian bridge ──────────────────────────────────────────────────
-        try:
-            from obsidian_bridge import ObsidianBridge
-            self.obsidian = ObsidianBridge(
-                config_path      = os.path.join(VA_DIR, "obsidian_config.json"),
-                on_note_ingested = self._on_vault_note_ingested,
-                on_daily_summary = self._on_daily_summary,
-            )
-            self.obsidian.start()
-            import ai as _ai
-            _ai.set_obsidian_bridge(self.obsidian)
-            print("[main] Obsidian bridge started.")
-        except Exception as e:
-            self.obsidian = None
-            print(f"[main] Obsidian bridge failed: {e}")
-
-        # ── Web search ───────────────────────────────────────────────────────
-        try:
-            from web_search import WebSearch
-            self.searcher = WebSearch(
-                config_path = os.path.join(VA_DIR, "websearch_config.json")
-            )
-            import ai as _ai
-            _ai.set_web_searcher(self.searcher)
-            print("[main] Web search ready.")
-        except Exception as e:
-            self.searcher = None
-            print(f"[main] Web search failed: {e}")
-
-        # ── Jules pipeline ───────────────────────────────────────────────────
-        try:
-            from jules_pipeline import build_jules_pipeline
-            self.jules = build_jules_pipeline(
-                obsidian_bridge  = self.obsidian,
-                on_pr_ready      = lambda t: self._speak_if_ready(
-                    f"Jules filed a pull request for: {t.title}"),
-                on_issue_created = lambda t: self._speak_if_ready(
-                    f"GitHub issue created. Jules is working on: {t.title}"),
-                config_path      = os.path.join(VA_DIR, "jules_config.json"),
-            )
-            self.jules.start()
-            print("[main] Jules pipeline started.")
-        except Exception as e:
-            self.jules = None
-            print(f"[main] Jules pipeline failed: {e}")
-
-        # Register shutdown
-        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
-
-    # ── Integration callbacks ────────────────────────────────────────────────
-
-    def _speak_if_ready(self, text: str):
-        """Speak via Echo's TTS if available, else just print."""
-        try:
-            from voice import speak
-            speak(text)
-        except Exception:
-            print(f"[echo] {text}")
-
-    def _on_vault_note_ingested(self, note):
-        """Called by ObsidianBridge when a tagged note is saved in Obsidian."""
-        if note is None:
-            return
-        try:
-            if note.has_tag("echo-task"):
-                self._speak_if_ready(f"New task imported from Obsidian: {note.title}")
-            if note.has_tag("jules-task"):
-                self._speak_if_ready(f"Jules task queued: {note.title}")
-        except Exception as e:
-            print(f"[main] vault callback error: {e}")
-
-    def _on_daily_summary(self):
-        """Called by bridge scheduler at daily_summary_time."""
-        import threading
-        threading.Thread(target=self._write_daily_summary, daemon=True).start()
-
-    def _write_daily_summary(self):
-        if self.obsidian is None:
-            return
-        try:
-            import ai as _ai
-            summary = _ai.ask(
-                "Write a brief end-of-day summary (under 100 words, plain text) "
-                "based on today's activity. No markdown."
-            )
-            self.obsidian.log_daily_summary(summary)
-        except Exception as e:
-            print(f"[main] daily summary error: {e}")
-
-    def _on_closing(self):
-        """Graceful shutdown — stop background threads before destroying root."""
-        try:
-            if self.obsidian:
-                self.obsidian.stop()
-            if self.jules:
-                self.jules.stop()
-        except Exception:
-            pass
-        self.root.destroy()
-
-    # ── end integration callbacks ─────────────────────────────────────────────
-
     def _get_or_create_window(self):
         if self.chat_window is None or not self.chat_window.winfo_exists():
             self.chat_window = self.ChatOverlay(self.root)
@@ -285,19 +182,6 @@ if __name__ == "__main__":
         if not _skip_briefing:
             b = get_morning_briefing()
             show_morning_briefing_notification(b)
-            # Log briefing to Obsidian vault (bridge may not be up yet, use direct write)
-            try:
-                from obsidian_bridge import ObsidianBridge as _OB
-                import json as _jj
-                _vcfg = _jj.load(open(os.path.join(VA_DIR, "obsidian_config.json")))
-                _tmp  = _OB.__new__(_OB)
-                from pathlib import Path as _P
-                from obsidian_bridge import VaultWriter as _VW
-                _tmp.writer = _VW(_P(_vcfg["vault_path"]).expanduser().resolve(),
-                                  _vcfg.get("subfolders", {}))
-                _tmp.writer.write_morning_briefing(b)
-            except Exception as _be:
-                pass  # non-fatal
             # Speak briefing if enabled
             try:
                 import json as _j, os as _o
@@ -333,37 +217,12 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[main] Game recorder skipped: {e}")
 
-    # Browser server — Echo Firefox sidebar
-    try:
-        from echo_browser_server import start_browser_server
-        start_browser_server()
-    except Exception as e:
-        print(f"[main] Browser server skipped: {e}")
-
     # Self-adjustment monitor
     try:
         from self_adjust import start_self_adjust
         start_self_adjust()
     except Exception as e:
         print(f"[main] Self-adjust skipped: {e}")
-
-    # BOINC schedule — suspend during active hours
-    try:
-        import subprocess as _bc
-        _bc.Popen(["bash", "/home/jesus999l/boinc-schedule.sh"],
-                  stdout=_bc.DEVNULL, stderr=_bc.DEVNULL)
-        print("[main] BOINC schedule applied.")
-    except Exception as e:
-        print(f"[main] BOINC skipped: {e}")
-
-    # Bluetooth smart switch — auto HFP when Discord runs
-    try:
-        import subprocess as _bts
-        _bts.Popen(["bash", "/home/jesus999l/bt-discord-switch.sh"],
-                   stdout=_bts.DEVNULL, stderr=_bts.DEVNULL)
-        print("[main] Bluetooth auto-switch started.")
-    except Exception as e:
-        print(f"[main] BT switch skipped: {e}")
 
     # Monthly maintenance — runs silently if due (every 28 days)
     try:
