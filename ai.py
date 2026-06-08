@@ -469,3 +469,11 @@ def execute_task(task):
             return list(self.PROVIDER_CHAIN) if hasattr(self, "PROVIDER_CHAIN") else []
         base = list(self.PROVIDER_CHAIN) if hasattr(self, "PROVIDER_CHAIN") else list(self.enabled_ais)
         return [p for p in base if p in self.enabled_ais]
+# Echo pipeline hooks
+def set_obsidian_bridge(bridge):
+    global _obsidian_bridge
+    _obsidian_bridge = bridge
+
+def set_web_searcher(searcher):
+    global _web_searcher
+    _web_searcher = searcher

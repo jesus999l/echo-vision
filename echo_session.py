@@ -69,7 +69,7 @@ def restore():
             continue
         launched.add(app_id)
         print(f"  launching {app_id}: {cmd}")
-        subprocess.Popen(cmd.split(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(cmd.split(), env=os.environ.copy(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.4)
     echo_speak(f"Session restored. {len(launched)} apps relaunched.")
 

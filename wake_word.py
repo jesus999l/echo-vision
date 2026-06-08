@@ -322,6 +322,16 @@ def _notify(msg):
 
 def speak(text):
     try:
+        # Write to Echo speech bubble
+        open("/tmp/echo_bubble.txt", "w").write(str(text))
+        import threading
+        def _clear():
+            import time; time.sleep(6)
+            try: open("/tmp/echo_bubble.txt", "w").write("")
+            except: pass
+        threading.Thread(target=_clear, daemon=False).start()
+    except: pass
+    try:
         from voice import speak as _speak
         _speak(text)
     except:
