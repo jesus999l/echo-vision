@@ -1047,6 +1047,7 @@ def run_detector(status_cb=None):
     stream.start_stream()
     print("[wake] Ready — say 'Hey Echo'")
     # Pre-warm vosk command model so first command is instant
+    global _vosk_cmd_model
     try:
         from vosk import Model as _VM
         _vosk_cmd_model = _VM(VOSK_MODEL_PATH)
