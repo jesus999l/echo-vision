@@ -398,7 +398,7 @@ class EchoChatWidget(Gtk.Box):
         launch_row.set_margin_top(6)
         upd_btn = Gtk.Button(label="🔄 Updates")
         upd_btn.get_style_context().add_class("echo-send")
-        upd_btn.connect("clicked", lambda *_: __import__('subprocess').Popen(["update-manager"]))
+        upd_btn.connect("clicked", lambda *_: __import__('subprocess').Popen(["mintupdate"]))
         echo_btn = Gtk.Button(label="🤖 Echo")
         echo_btn.get_style_context().add_class("echo-send")
         echo_btn.connect("clicked", lambda *_: __import__('subprocess').Popen(["/home/jesus999l/vision_env/bin/python3", "/home/jesus999l/vision_assistant/main.py", "--ui"]))

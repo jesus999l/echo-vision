@@ -1046,6 +1046,13 @@ def run_detector(status_cb=None):
     stream = _make_stream(pa)
     stream.start_stream()
     print("[wake] Ready — say 'Hey Echo'")
+    # Pre-warm vosk command model so first command is instant
+    try:
+        from vosk import Model as _VM
+        _vosk_cmd_model = _VM(VOSK_MODEL_PATH)
+        print("[wake] Vosk cmd model pre-warmed")
+    except Exception as _e:
+        print(f"[wake] Vosk prewarm failed: {_e}")
     if status_cb: status_cb("listening")
 
     try:
