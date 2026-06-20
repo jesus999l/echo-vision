@@ -19,3 +19,5 @@ echo_bridge.json
 echo_interests.json
 browser_action_log.json
 data/
+models/
+model_fixed/
