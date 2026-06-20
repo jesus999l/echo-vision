@@ -23,3 +23,6 @@ CLOUD_SYNC_URL = ""
 USER_NAME     = ""
 USER_GOALS    = []
 USER_TIMEZONE = ""
+
+# --- Whisper Settings ---
+WHISPER_MODEL_PATH = "/home/jesus999l/whisper-base-ct2"

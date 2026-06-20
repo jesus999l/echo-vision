@@ -1,11 +1,25 @@
+#!/usr/bin/env python3
 """
-Voice — Vosk STT + Piper TTS.
+Voice — Vosk STT + Piper TTS (unified sox pipeline on all paths).
 """
-import os, sys, json, queue, threading, subprocess, tempfile
+import os
+import sys
+import json
+import queue
+import threading
+import subprocess
+import tempfile
+import time
 
 VOSK_MODEL_PATH = os.path.expanduser("~/vosk-model-small-en-us-0.15")
-PIPER_BIN   = os.path.expanduser("~/vision_env/bin/piper")
+PIPER_BIN       = os.path.expanduser("~/Echo/AI/Voices/piper/piper")
 PIPER_MODEL     = os.path.expanduser("~/Echo/AI/Voices/piper/models/en_US-lessac-medium.onnx")
+
+# Sox processing params — locked
+SOX_PITCH    = "250"
+SOX_RATE     = "18000"
+SOX_OVERDRIVE = "2"
+SOX_VOL      = "0.6"
 
 _vosk_model = None
 
@@ -49,7 +63,7 @@ def record_once(timeout=5, callback=None):
         max_silence = int(timeout * 16000 / 4096)
 
         def _record():
-            result_text  = ""
+            result_text   = ""
             silence_count = 0
             while silence_count < max_silence:
                 data = stream.read(4096, exception_on_overflow=False)
@@ -68,30 +82,82 @@ def record_once(timeout=5, callback=None):
     except Exception as e:
         if callback: callback(None, str(e))
 
-# ── TTS ───────────────────────────────────────────────────────────────────────
-def speak(text, blocking=False):
-    """Speak text with Piper TTS, fallback to espeak-ng."""
+# ── CORE TTS (shared by all paths) ───────────────────────────────────────────
+def _run_piper_sox(text: str):
+    """
+    Single canonical TTS pipeline: piper → sox (pitch/overdrive/vol) → aplay.
+    Blocking. Raises on failure so callers can catch and fallback.
+    """
+    piper_proc = subprocess.Popen(
+        [
+            PIPER_BIN,
+            "--model", PIPER_MODEL,
+            "--output_raw",
+            "--length_scale", "1.05",
+            "--noise_scale", "1.10",
+            "--noise_w", "1.20",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    sox_proc = subprocess.Popen(
+        [
+            "sox",
+            "-t", "raw", "-r", "22050", "-e", "signed", "-b", "16", "-",
+            "-t", "wav", "-",
+            "pitch", SOX_PITCH,
+            "rate", SOX_RATE,
+            "overdrive", SOX_OVERDRIVE,
+            "vol", SOX_VOL,
+        ],
+        stdin=piper_proc.stdout,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    aplay_proc = subprocess.Popen(
+        ["aplay", "-q", "-"],
+        stdin=sox_proc.stdout,
+        stderr=subprocess.DEVNULL,
+    )
+    piper_proc.stdin.write(text.encode())
+    piper_proc.stdin.close()
+    aplay_proc.wait()
+    piper_proc.wait()
+    sox_proc.wait()
+
+def _espeak_fallback(text: str):
+    subprocess.run(
+        ["espeak-ng", "-v", "en-us+f2", "-s", "128", "-p", "60", "-a", "180", text[:200]],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+# ── PUBLIC speak() ────────────────────────────────────────────────────────────
+def speak(text: str, blocking: bool = False):
+    """
+    Speak text through Piper+sox pipeline.
+    blocking=True  → caller blocks until audio finishes (use in wake_word listen_loop)
+    blocking=False → fires in background thread (use in echo_session daemon speaks)
+    """
     if not piper_available():
         try:
-            subprocess.Popen(["espeak-ng", "-s", "150", text],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except: pass
+            if blocking:
+                _espeak_fallback(text)
+            else:
+                threading.Thread(target=_espeak_fallback, args=(text,), daemon=True).start()
+        except Exception:
+            pass
         return
 
     def _speak():
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                wav_path = f.name
-            proc = subprocess.run(
-                [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path, "--length_scale", "1.05", "--noise_scale", "1.10", "--noise_w", "1.20"],
-                input=text.encode(), capture_output=True
-            )
-            if proc.returncode == 0:
-                subprocess.run(["aplay", "-q", wav_path],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            os.unlink(wav_path)
+            _run_piper_sox(text)
         except Exception as e:
             print(f"[voice] TTS error: {e}")
+            try:
+                _espeak_fallback(text)
+            except Exception:
+                pass
 
     if blocking:
         _speak()
@@ -102,34 +168,28 @@ def speak(text, blocking=False):
 _tts_queue   = queue.Queue()
 _tts_started = False
 
-def _tts_sentence(text):
-    """Render and play one sentence, blocking."""
+def _tts_sentence(text: str):
+    """Render and play one sentence through the canonical Piper+sox pipeline."""
     text = text.strip()
-    if not text: return
+    if not text:
+        return
     if not piper_available():
-        try:
-            subprocess.run(["espeak-ng", "-s", "150", text],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except: pass
+        _espeak_fallback(text)
         return
     try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            wav_path = f.name
-        proc = subprocess.run(
-            [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", wav_path, "--length_scale", "1.05", "--noise_scale", "1.10", "--noise_w", "1.20"],
-            input=text.encode(), capture_output=True
-        )
-        if proc.returncode == 0:
-            subprocess.run(["aplay", "-q", wav_path],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        os.unlink(wav_path)
+        _run_piper_sox(text)
     except Exception as e:
-        print(f"[voice] TTS error: {e}")
+        print(f"[voice] streaming TTS error: {e}")
+        try:
+            _espeak_fallback(text)
+        except Exception:
+            pass
 
 def _tts_worker():
     while True:
         item = _tts_queue.get()
-        if item is None: break
+        if item is None:
+            break
         _tts_sentence(item)
         _tts_queue.task_done()
 
@@ -140,18 +200,28 @@ def _ensure_tts_worker():
         threading.Thread(target=_tts_worker, daemon=True).start()
 
 def speak_stream(sentence_iter):
-    """Speak sentences from iterator as they arrive — first word in ~0.8s."""
+    """
+    Speak sentences from iterator as they arrive.
+    Updates bubble per sentence. Clears bubble after final sentence finishes playing.
+    """
     _ensure_tts_worker()
+
     def _feed():
+        last_sentence = ""
         for s in sentence_iter:
             s = s.strip()
             if s:
+                last_sentence = s
                 _tts_queue.put(s)
                 try:
                     open("/tmp/echo_bubble.txt", "w").write(s)
                 except Exception:
                     pass
-        import time; time.sleep(6)
-        try: open("/tmp/echo_bubble.txt", "w").write("")
-        except: pass
+        # Wait for queue to drain — actual audio done
+        _tts_queue.join()
+        try:
+            open("/tmp/echo_bubble.txt", "w").write("")
+        except Exception:
+            pass
+
     threading.Thread(target=_feed, daemon=True).start()

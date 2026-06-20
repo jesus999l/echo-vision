@@ -130,6 +130,7 @@ class DriftPanel:
         self.expanded    = True
         self.edge        = EDGE
         self.kills       = {}   # id → click count
+        self.expanded_groups = set()
         self.ktimes      = {}   # id → last click time
         self.windows     = []
         self._build()
@@ -226,7 +227,9 @@ class DriftPanel:
             GtkLayerShell.set_anchor(self.win, e, False)
         for e in edges.get(edge, edges["left"]):
             GtkLayerShell.set_anchor(self.win, e, True)
-        GtkLayerShell.set_exclusive_zone(self.win, PANEL_WIDTH)
+        TOGGLE_W = 22
+        zone = (PANEL_WIDTH + TOGGLE_W) if self.expanded else TOGGLE_W
+        GtkLayerShell.set_exclusive_zone(self.win, zone)
         GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.BOTTOM, 32)
         self.edge = edge
         if not init:
@@ -245,13 +248,16 @@ class DriftPanel:
 
     def _on_toggle(self, btn):
         self.expanded = not self.expanded
+        TOGGLE_W = 22
         if self.expanded:
             self.body.show()
-            GtkLayerShell.set_exclusive_zone(self.win, PANEL_WIDTH)
+            GtkLayerShell.set_exclusive_zone(self.win, PANEL_WIDTH + TOGGLE_W)
+            self.win.set_size_request(PANEL_WIDTH + TOGGLE_W, -1)
             self.toggle.set_label("◀")
         else:
             self.body.hide()
-            GtkLayerShell.set_exclusive_zone(self.win, COLLAPSED_W)
+            GtkLayerShell.set_exclusive_zone(self.win, TOGGLE_W)
+            self.win.set_size_request(TOGGLE_W, -1)
             self.toggle.set_label("▶")
 
     def _refresh(self):
@@ -268,11 +274,43 @@ class DriftPanel:
         for app_id, wins in groups.items():
             grp = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             grp.get_style_context().add_class("app-group")
+            # Collapse header — persist open state across refreshes
+            hdr = Gtk.Button()
+            hdr.set_relief(Gtk.ReliefStyle.NONE)
+            count = len(wins)
+            hdr_label = Gtk.Label(label=f"{app_id}  [{count}]")
+            hdr_label.set_halign(Gtk.Align.START)
+            hdr_label.get_style_context().add_class("win-app")
+            hdr.add(hdr_label)
+            grp.pack_start(hdr, False, False, 0)
+            # Window rows container — restore saved state
+            rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            is_expanded = app_id in self.expanded_groups
+            rows.set_visible(is_expanded)
             for w in wins:
-                grp.pack_start(self._make_row(w), False, False, 0)
+                rows.pack_start(self._make_row(w), False, False, 0)
+            grp.pack_start(rows, False, False, 0)
+            def _toggle(b, r, aid, self=self):
+                new_vis = not r.get_visible()
+                r.set_visible(new_vis)
+                if new_vis:
+                    self.expanded_groups.add(aid)
+                else:
+                    self.expanded_groups.discard(aid)
+            hdr.connect("clicked", _toggle, rows, app_id)
             self.list_box.pack_start(grp, False, False, 2)
 
         self.list_box.show_all()
+        # Restore collapse state after show_all
+        for grp in self.list_box.get_children():
+            children = grp.get_children()
+            if len(children) >= 2:
+                rows = children[1]
+                hdr = children[0]
+                lbl = hdr.get_child()
+                if lbl:
+                    aid = lbl.get_text().split('  [')[0]
+                    rows.set_visible(aid in self.expanded_groups)
         return True
 
     def _make_row(self, win):
