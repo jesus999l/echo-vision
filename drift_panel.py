@@ -230,7 +230,7 @@ class DriftPanel:
         TOGGLE_W = 22
         zone = (PANEL_WIDTH + TOGGLE_W) if self.expanded else TOGGLE_W
         GtkLayerShell.set_exclusive_zone(self.win, zone)
-        GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.BOTTOM, 32)
+        GtkLayerShell.set_margin(self.win, GtkLayerShell.Edge.BOTTOM, 0)
         self.edge = edge
         if not init:
             self.toggle.set_label("◀" if edge == "left" else
@@ -251,14 +251,17 @@ class DriftPanel:
         TOGGLE_W = 22
         if self.expanded:
             self.body.show()
-            GtkLayerShell.set_exclusive_zone(self.win, PANEL_WIDTH + TOGGLE_W)
             self.win.set_size_request(PANEL_WIDTH + TOGGLE_W, -1)
+            GtkLayerShell.set_exclusive_zone(self.win, PANEL_WIDTH + TOGGLE_W)
             self.toggle.set_label("◀")
         else:
             self.body.hide()
-            GtkLayerShell.set_exclusive_zone(self.win, TOGGLE_W)
             self.win.set_size_request(TOGGLE_W, -1)
+            GtkLayerShell.set_exclusive_zone(self.win, TOGGLE_W)
             self.toggle.set_label("▶")
+        self.win.queue_resize()
+        while Gtk.events_pending():
+            Gtk.main_iteration_do(False)
 
     def _refresh(self):
         self.windows = wlr_list()
