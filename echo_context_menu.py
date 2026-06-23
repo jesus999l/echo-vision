@@ -144,7 +144,13 @@ def run_action(action, ctx_data):
             zone["members"] = members
             save_zones(zones)
             reload_zones_in_driftwm()
-            notify("'{}' added to {}".format(app_id, zone["name"]))
+            # Snap window into zone
+            import json as _json
+            snap = {"action": "snap_to_zone", "app_id": app_id,
+                    "zone_x": zone["x"], "zone_y": zone["y"],
+                    "zone_w": zone["w"], "zone_h": zone["h"]}
+            Path("/tmp/echo_snap.json").write_text(_json.dumps(snap))
+            notify("'{}' -> {}".format(app_id, zone["name"]))
 
     elif action == "remove_from_zone":
         app_id = ctx_data.get("window_app_id", "")
