@@ -132,6 +132,31 @@ def run_action(action, ctx_data):
             reload_zones_in_driftwm()
             notify("Renamed to {}".format(name))
 
+    elif action == "add_selected":
+        target_id = ctx_data.get("add_zone_id", "")
+        selected_ids = ctx_data.get("selected_app_ids", [])
+        if not target_id or not selected_ids: return
+        zone = next((z for z in zones if z["id"] == target_id), None)
+        if not zone: return
+        members = zone.get("members", [])
+        added = []
+        for app_id in selected_ids:
+            if app_id not in members:
+                members.append(app_id)
+                added.append(app_id)
+        zone["members"] = members
+        save_zones(zones)
+        reload_zones_in_driftwm()
+        # Snap all added windows into zone with offsets
+        import json as _json
+        for i, app_id in enumerate(added):
+            snap = {"action": "snap_to_zone", "app_id": app_id,
+                    "zone_x": zone["x"] + i * 40, "zone_y": zone["y"] + i * 40,
+                    "zone_w": zone["w"], "zone_h": zone["h"]}
+            Path("/tmp/echo_snap.json").write_text(_json.dumps(snap))
+            import time; time.sleep(0.25)
+        notify("{} windows -> {}".format(len(added), zone["name"]))
+
     elif action == "add_to_zone":
         target_id = ctx_data.get("add_zone_id", "")
         app_id = ctx_data.get("window_app_id", "")
@@ -213,12 +238,20 @@ def main():
         ]
     else:
         title = "Echo"
-        for z in zones:
-            items.append(("  {}".format(z["name"]), "goto_zone:{}".format(z["id"]), z.get("color","#888")))
-        if zones:
+        selected_ids = ctx_data.get("selected_app_ids", [])
+        if selected_ids and zones:
+            # Has selection — show "add to zone" for each zone
+            items.append(("  Add {} selected to:".format(len(selected_ids)), None, None))
+            for z in zones:
+                items.append(("    {}".format(z["name"]), "add_selected:{}".format(z["id"]), z.get("color","#888")))
             items.append(("", None, None))
+        else:
+            for z in zones:
+                items.append(("  {}".format(z["name"]), "goto_zone:{}".format(z["id"]), z.get("color","#888")))
+            if zones:
+                items.append(("", None, None))
         items.append(("  New zone here", "new_zone", None))
-        if sel > 1:
+        if sel > 1 and not selected_ids:
             items.append(("  Group {} windows into zone".format(sel), "new_zone", None))
 
     d = Gtk.Dialog(title=title, flags=0)
@@ -295,6 +328,9 @@ def main():
         elif act.startswith("add_to_zone:"):
             ctx_data["add_zone_id"] = act.split(":", 1)[1]
             run_action("add_to_zone", ctx_data)
+        elif act.startswith("add_selected:"):
+            ctx_data["add_zone_id"] = act.split(":", 1)[1]
+            run_action("add_selected", ctx_data)
         else:
             run_action(act, ctx_data)
 
