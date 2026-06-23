@@ -132,6 +132,33 @@ def run_action(action, ctx_data):
             reload_zones_in_driftwm()
             notify("Renamed to {}".format(name))
 
+    elif action == "add_to_zone":
+        target_id = ctx_data.get("add_zone_id", "")
+        app_id = ctx_data.get("window_app_id", "")
+        if not target_id or not app_id: return
+        zone = next((z for z in zones if z["id"] == target_id), None)
+        if not zone: return
+        members = zone.get("members", [])
+        if app_id not in members:
+            members.append(app_id)
+            zone["members"] = members
+            save_zones(zones)
+            reload_zones_in_driftwm()
+            notify("'{}' added to {}".format(app_id, zone["name"]))
+
+    elif action == "remove_from_zone":
+        app_id = ctx_data.get("window_app_id", "")
+        if not app_id: return
+        changed = False
+        for z in zones:
+            if app_id in z.get("members", []):
+                z["members"] = [m for m in z["members"] if m != app_id]
+                changed = True
+        if changed:
+            save_zones(zones)
+            reload_zones_in_driftwm()
+            notify("'{}' removed from zone".format(app_id))
+
     elif action == "recolor":
         zone = next((z for z in zones if z["id"] == zone_id), None)
         if not zone: return
@@ -152,7 +179,24 @@ def main():
 
     items = []
 
-    if ctx == "zone":
+    if ctx == "window":
+        app_id = ctx_data.get("window_app_id", "")
+        win_title = ctx_data.get("window_title", "") or app_id or "Window"
+        title = win_title[:30]
+        # Find which zone this window already belongs to
+        current_zone = next((z for z in zones if app_id and app_id in z.get("members",[])), None)
+        if current_zone:
+            items.append(("  In: {}".format(current_zone["name"]), None, current_zone.get("color","#888")))
+            items.append(("", None, None))
+            items.append(("  Remove from zone", "remove_from_zone", None))
+        else:
+            items.append(("  Add to zone:", None, None))
+            for z in zones:
+                items.append(("    {}".format(z["name"]), "add_to_zone:{}".format(z["id"]), z.get("color","#888")))
+        if zones:
+            items.append(("", None, None))
+        items.append(("  New zone here", "new_zone", None))
+    elif ctx == "zone":
         zone = next((z for z in zones if z["id"] == zone_id), None)
         zname = zone["name"] if zone else zone_id
         title = "Zone: {}".format(zname)
@@ -242,6 +286,9 @@ def main():
         if act.startswith("goto_zone:"):
             ctx_data["goto_zone_id"] = act.split(":", 1)[1]
             run_action("goto_zone", ctx_data)
+        elif act.startswith("add_to_zone:"):
+            ctx_data["add_zone_id"] = act.split(":", 1)[1]
+            run_action("add_to_zone", ctx_data)
         else:
             run_action(act, ctx_data)
 
