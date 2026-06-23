@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-import json, subprocess, os, uuid
+import json, subprocess, os, uuid, fcntl, sys
 from pathlib import Path
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib
+
+_lock_fh = open("/tmp/echo_ctx_menu.lock", "w")
+try:
+    fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except:
+    sys.exit(0)
 
 ZONES_FILE = os.path.expanduser("~/.config/driftwm/zones.json")
 CTX_FILE = "/tmp/echo_ctx_menu.json"
@@ -21,20 +27,50 @@ def notify(msg):
     subprocess.Popen(["notify-send","-t","2000","Echo",msg],
         stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
+def reload_zones_in_driftwm():
+    try: Path(ZONES_FILE).touch()
+    except: pass
+
+def pick_color(current="#3050FF"):
+    d = Gtk.Dialog(title="Pick color", flags=0)
+    d.set_keep_above(True)
+    b = d.get_content_area()
+    b.set_margin_top(12); b.set_margin_bottom(12)
+    b.set_margin_start(12); b.set_margin_end(12); b.set_spacing(8)
+    b.add(Gtk.Label(label="Pick color:"))
+    chosen = [current]
+    flow = Gtk.FlowBox()
+    flow.set_max_children_per_line(3)
+    flow.set_selection_mode(Gtk.SelectionMode.NONE)
+    for n, hc in COLORS.items():
+        btn = Gtk.Button(label=n)
+        css = Gtk.CssProvider()
+        css.load_from_data(
+            "button{{background:{};color:white;min-width:80px;min-height:36px;}}".format(hc).encode())
+        btn.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        def clk(w, h=hc): chosen[0] = h; d.response(Gtk.ResponseType.OK)
+        btn.connect("clicked", clk)
+        flow.add(btn)
+    b.add(flow)
+    d.add_button("Skip", Gtk.ResponseType.CANCEL)
+    d.show_all()
+    d.run()
+    d.destroy()
+    return chosen[0]
+
 def run_action(action, ctx_data):
     zones = load_zones()
-    zone_id = ctx_data.get("zone_id","")
-    cx = ctx_data.get("x",0)
-    cy = ctx_data.get("y",0)
+    zone_id = ctx_data.get("zone_id", "")
+    cx = ctx_data.get("x", 0)
+    cy = ctx_data.get("y", 0)
 
     if action == "new_zone":
-        # Name dialog
-        d = Gtk.Dialog(title="New Zone",flags=0)
+        d = Gtk.Dialog(title="New Zone", flags=0)
         d.set_keep_above(True)
-        d.set_default_size(300,100)
+        d.set_default_size(300, 100)
         b = d.get_content_area()
-        b.set_margin_top(12);b.set_margin_bottom(12)
-        b.set_margin_start(12);b.set_margin_end(12);b.set_spacing(8)
+        b.set_margin_top(12); b.set_margin_bottom(12)
+        b.set_margin_start(12); b.set_margin_end(12); b.set_spacing(8)
         b.add(Gtk.Label(label="Zone name:"))
         e = Gtk.Entry(); e.set_text("Zone {}".format(len(zones)+1))
         e.set_activates_default(True)
@@ -48,56 +84,43 @@ def run_action(action, ctx_data):
         d.destroy()
         if resp != Gtk.ResponseType.OK or not name:
             return
-        # Color dialog
-        d2 = Gtk.Dialog(title="Color",flags=0)
-        d2.set_keep_above(True)
-        b2 = d2.get_content_area()
-        b2.set_margin_top(12);b2.set_margin_bottom(12)
-        b2.set_margin_start(12);b2.set_margin_end(12);b2.set_spacing(8)
-        b2.add(Gtk.Label(label="Pick color:"))
-        chosen = ["#3050FF"]
-        flow = Gtk.FlowBox()
-        flow.set_max_children_per_line(3)
-        flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        for n,hc in COLORS.items():
-            btn = Gtk.Button(label=n)
-            css = Gtk.CssProvider()
-            css.load_from_data("button{{background:{};color:white;min-width:80px;min-height:36px;}}".format(hc).encode())
-            btn.get_style_context().add_provider(css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-            def clk(w,h=hc): chosen[0]=h; d2.response(Gtk.ResponseType.OK)
-            btn.connect("clicked",clk)
-            flow.add(btn)
-        b2.add(flow)
-        d2.add_button("Skip",Gtk.ResponseType.CANCEL)
-        d2.show_all()
-        d2.run()
-        color = chosen[0]
-        d2.destroy()
-        zones.append({"id":str(uuid.uuid4())[:8],"name":name,
-            "x":cx-640,"y":cy-360,"w":2560,"h":1440,"color":color})
+        color = pick_color(current="#3050FF")
+        zones.append({"id": str(__import__("uuid").uuid4())[:8], "name": name,
+            "x": cx-640, "y": cy-360, "w": 2560, "h": 1440, "color": color})
         save_zones(zones)
+        reload_zones_in_driftwm()
         notify("Zone '{}' created".format(name))
 
-    elif action == "delete":
-        zone = next((z for z in zones if z["id"]==zone_id),None)
+    elif action == "goto_zone":
+        target_id = ctx_data.get("goto_zone_id", "")
+        zone = next((z for z in zones if z["id"] == target_id), None)
         if not zone: return
-        save_zones([z for z in zones if z["id"]!=zone_id])
+        nav = {"action": "goto_zone", "zone_id": target_id,
+               "x": zone["x"], "y": zone["y"], "w": zone["w"], "h": zone["h"]}
+        Path("/tmp/echo_nav.json").write_text(__import__("json").dumps(nav))
+        notify("-> {}".format(zone["name"]))
+
+    elif action == "delete":
+        zone = next((z for z in zones if z["id"] == zone_id), None)
+        if not zone: return
+        save_zones([z for z in zones if z["id"] != zone_id])
+        reload_zones_in_driftwm()
         notify("Zone '{}' deleted".format(zone["name"]))
 
     elif action == "rename":
-        zone = next((z for z in zones if z["id"]==zone_id),None)
+        zone = next((z for z in zones if z["id"] == zone_id), None)
         if not zone: return
-        d = Gtk.Dialog(title="Rename",flags=0)
+        d = Gtk.Dialog(title="Rename", flags=0)
         d.set_keep_above(True)
         b = d.get_content_area()
-        b.set_margin_top(12);b.set_margin_bottom(12)
-        b.set_margin_start(12);b.set_margin_end(12);b.set_spacing(8)
+        b.set_margin_top(12); b.set_margin_bottom(12)
+        b.set_margin_start(12); b.set_margin_end(12); b.set_spacing(8)
         b.add(Gtk.Label(label="New name:"))
         e = Gtk.Entry(); e.set_text(zone["name"])
         e.set_activates_default(True)
         b.add(e)
-        d.add_button("Cancel",Gtk.ResponseType.CANCEL)
-        d.add_button("OK",Gtk.ResponseType.OK)
+        d.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        d.add_button("OK", Gtk.ResponseType.OK)
         d.set_default_response(Gtk.ResponseType.OK)
         d.show_all()
         resp = d.run()
@@ -106,75 +129,94 @@ def run_action(action, ctx_data):
         if resp == Gtk.ResponseType.OK and name:
             zone["name"] = name
             save_zones(zones)
+            reload_zones_in_driftwm()
             notify("Renamed to {}".format(name))
 
     elif action == "recolor":
-        zone = next((z for z in zones if z["id"]==zone_id),None)
+        zone = next((z for z in zones if z["id"] == zone_id), None)
         if not zone: return
-        d2 = Gtk.Dialog(title="Color",flags=0)
-        d2.set_keep_above(True)
-        b2 = d2.get_content_area()
-        b2.set_margin_top(12);b2.set_margin_bottom(12)
-        b2.set_margin_start(12);b2.set_margin_end(12);b2.set_spacing(8)
-        b2.add(Gtk.Label(label="Pick color:"))
-        chosen = [zone.get("color","#3050FF")]
-        flow = Gtk.FlowBox()
-        flow.set_max_children_per_line(3)
-        flow.set_selection_mode(Gtk.SelectionMode.NONE)
-        for n,hc in COLORS.items():
-            btn = Gtk.Button(label=n)
-            css = Gtk.CssProvider()
-            css.load_from_data("button{{background:{};color:white;min-width:80px;min-height:36px;}}".format(hc).encode())
-            btn.get_style_context().add_provider(css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-            def clk(w,h=hc): chosen[0]=h; d2.response(Gtk.ResponseType.OK)
-            btn.connect("clicked",clk)
-            flow.add(btn)
-        b2.add(flow)
-        d2.add_button("Cancel",Gtk.ResponseType.CANCEL)
-        d2.show_all()
-        d2.run()
-        zone["color"] = chosen[0]
-        d2.destroy()
+        color = pick_color(current=zone.get("color", "#3050FF"))
+        zone["color"] = color
         save_zones(zones)
+        reload_zones_in_driftwm()
         notify("Color updated")
 
 def main():
-    try: ctx_data = json.loads(Path(CTX_FILE).read_text())
-    except: ctx_data = {"context":"canvas","x":0,"y":0}
+    try: ctx_data = __import__("json").loads(Path(CTX_FILE).read_text())
+    except: ctx_data = {"context": "canvas", "x": 0, "y": 0}
 
-    ctx = ctx_data.get("context","canvas")
-    zone_id = ctx_data.get("zone_id","")
-    sel = ctx_data.get("selected_count",0)
+    ctx = ctx_data.get("context", "canvas")
+    zone_id = ctx_data.get("zone_id", "")
+    sel = ctx_data.get("selected_count", 0)
     zones = load_zones()
 
-    # Build items list
     items = []
-    if ctx == "zone":
-        zone = next((z for z in zones if z["id"]==zone_id),None)
-        zname = zone["name"] if zone else zone_id
-        items = [
-            ("✏  Rename zone", "rename"),
-            ("🎨  Change color", "recolor"),
-            ("🗑  Delete zone", "delete"),
-        ]
-        title = "Zone: {}".format(zname)
-    else:
-        items = [("＋  New zone here", "new_zone")]
-        if sel > 1:
-            items.append(("⬡  Group {} into zone".format(sel), "new_zone"))
-        title = "Echo Menu"
 
-    # Show as simple dialog with listbox
+    if ctx == "zone":
+        zone = next((z for z in zones if z["id"] == zone_id), None)
+        zname = zone["name"] if zone else zone_id
+        title = "Zone: {}".format(zname)
+        items = [
+            ("  Rename zone", "rename", None),
+            ("  Change color", "recolor", None),
+            ("  Delete zone", "delete", None),
+        ]
+    else:
+        title = "Echo"
+        for z in zones:
+            items.append(("  {}".format(z["name"]), "goto_zone:{}".format(z["id"]), z.get("color","#888")))
+        if zones:
+            items.append(("", None, None))
+        items.append(("  New zone here", "new_zone", None))
+        if sel > 1:
+            items.append(("  Group {} windows into zone".format(sel), "new_zone", None))
+
     d = Gtk.Dialog(title=title, flags=0)
     d.set_keep_above(True)
-    d.set_default_size(250, 50 + len(items)*44)
+    real_count = sum(1 for item in items if item[1] is not None)
+    d.set_default_size(260, 56 + real_count * 44)
     box = d.get_content_area()
     box.set_spacing(0)
 
+    css_prov = Gtk.CssProvider()
+    css_prov.load_from_data(b"""
+        dialog { background: #12121e; }
+        .menu-btn { background: transparent; color: #d0d0f0;
+                    border: none; padding: 10px 18px; font-size: 13px; }
+        .menu-btn:hover { background: #22224a; }
+        .sep-lbl { color: #444; font-size: 10px; padding: 2px 18px; }
+    """)
+    Gtk.StyleContext.add_provider_for_screen(
+        Gdk.Screen.get_default(), css_prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
     chosen_action = [None]
 
-    for label, key in items:
-        btn = Gtk.Button(label=label)
+    for item in items:
+        label, key, color = item
+        if key is None:
+            sep = Gtk.Label(label="---")
+            sep.get_style_context().add_class("sep-lbl")
+            sep.set_halign(Gtk.Align.START)
+            box.pack_start(sep, False, False, 0)
+            continue
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        row.set_margin_start(4)
+
+        if color:
+            dot = Gtk.Label(label="●")
+            dot_css = Gtk.CssProvider()
+            dot_css.load_from_data("label {{ color: {}; font-size: 14px; }}".format(color).encode())
+            dot.get_style_context().add_provider(dot_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            row.pack_start(dot, False, False, 0)
+
+        lbl = Gtk.Label(label=label)
+        lbl.set_halign(Gtk.Align.START)
+        row.pack_start(lbl, True, True, 0)
+
+        btn = Gtk.Button()
+        btn.add(row)
+        btn.get_style_context().add_class("menu-btn")
         btn.set_relief(Gtk.ReliefStyle.NONE)
         def click(w, k=key):
             chosen_action[0] = k
@@ -184,21 +226,24 @@ def main():
 
     d.show_all()
 
-    # Position near cursor
-    mx = int(ctx_data.get("screen_x",0))
-    my = int(ctx_data.get("screen_y",0))
-    if mx==0 and my==0:
+    mx = int(ctx_data.get("screen_x", 0))
+    my = int(ctx_data.get("screen_y", 0))
+    if mx == 0 and my == 0:
         display = Gdk.Display.get_default()
         seat = display.get_default_seat()
         ptr = seat.get_pointer()
-        screen,mx,my = ptr.get_position()
+        _screen, mx, my = ptr.get_position()
     d.move(mx, my)
-
     d.run()
     d.destroy()
 
     if chosen_action[0]:
-        run_action(chosen_action[0], ctx_data)
+        act = chosen_action[0]
+        if act.startswith("goto_zone:"):
+            ctx_data["goto_zone_id"] = act.split(":", 1)[1]
+            run_action("goto_zone", ctx_data)
+        else:
+            run_action(act, ctx_data)
 
 if __name__ == "__main__":
     main()
