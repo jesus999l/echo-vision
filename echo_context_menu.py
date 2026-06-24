@@ -13,6 +13,7 @@ except:
 
 ZONES_FILE = os.path.expanduser("~/.config/driftwm/zones.json")
 CTX_FILE = "/tmp/echo_ctx_menu.json"
+ECHO_MODE_FILE = "/tmp/echo_mode.json"
 COLORS = {"Blue":"#3050FF","Green":"#20C040","Red":"#FF4020",
           "Orange":"#FFA020","Purple":"#A020FF","Cyan":"#20FFC0"}
 
@@ -199,6 +200,29 @@ def run_action(action, ctx_data):
         reload_zones_in_driftwm()
         notify("Color updated")
 
+    elif action == "echo_idle":
+        import json as _j
+        Path(ECHO_MODE_FILE).write_text(_j.dumps({"mode": "idle", "orbit": True}))
+        notify("Echo: Idle — zones orbit")
+
+    elif action == "echo_free_roam":
+        import json as _j
+        Path(ECHO_MODE_FILE).write_text(_j.dumps({"mode": "free_roam", "orbit": False}))
+        notify("Echo: Free Roam")
+
+    elif action == "echo_follow":
+        import json as _j
+        Path(ECHO_MODE_FILE).write_text(_j.dumps({"mode": "follow_window", "orbit": False}))
+        notify("Echo: Following focused window")
+
+    elif action == "talk_to_echo":
+        subprocess.Popen(
+            ["notify-send", "-t", "3000", "Echo", "Listening... (wake word active)"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Touch the wake trigger file if it exists
+        wake_trigger = Path("/tmp/echo_wake_trigger")
+        wake_trigger.touch()
+
 def main():
     try: ctx_data = __import__("json").loads(Path(CTX_FILE).read_text())
     except: ctx_data = {"context": "canvas", "x": 0, "y": 0}
@@ -253,6 +277,12 @@ def main():
         items.append(("  New zone here", "new_zone", None))
         if sel > 1 and not selected_ids:
             items.append(("  Group {} windows into zone".format(sel), "new_zone", None))
+        items.append(("", None, None))
+        items.append(("  ── Echo ──", None, None))
+        items.append(("  Echo Idle", "echo_idle", "#A020FF"))
+        items.append(("  Echo Free Roam", "echo_free_roam", "#20C0FF"))
+        items.append(("  Echo Follow Window", "echo_follow", "#20FFC0"))
+        items.append(("  Talk to Echo", "talk_to_echo", "#FF80FF"))
 
     d = Gtk.Dialog(title=title, flags=0)
     d.set_keep_above(True)
@@ -331,6 +361,8 @@ def main():
         elif act.startswith("add_selected:"):
             ctx_data["add_zone_id"] = act.split(":", 1)[1]
             run_action("add_selected", ctx_data)
+        elif act in ("echo_idle", "echo_free_roam", "echo_follow", "talk_to_echo"):
+            run_action(act, ctx_data)
         else:
             run_action(act, ctx_data)
 
