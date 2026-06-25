@@ -60,7 +60,10 @@ def build_system_prompt():
     except:
         log_str = "  (none)"
 
-    return f"""You are a smart, direct personal AI assistant. Today is {now.strftime('%A, %B %d %Y at %H:%M')}.
+    from echo_personality import ECHO_PERSONALITY as _EP
+    return f"""{_EP}
+
+Today is {now.strftime('%A, %B %d %Y at %H:%M')}.
 
 USER CONTEXT:
 {_personality_cache['ctx']}

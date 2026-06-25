@@ -5,7 +5,7 @@ DB_PATH         = os.path.join(BASE_DIR, "memory.db")
 SCREENSHOT_PATH = "/tmp/vision_capture.png"
 
 OLLAMA_BASE     = "http://127.0.0.1:11434"
-LLM_URL         = "http://127.0.0.1:3210/v1/chat/completions"
+LLM_URL         = "http://127.0.0.1:3211/v1/chat/completions"
 MODELS_URL      = f"{OLLAMA_BASE}/v1/models"
 VISION_API_URL  = f"{OLLAMA_BASE}/api/chat"
 
@@ -20,7 +20,7 @@ SYNC_PORT      = 59998
 SYNC_SECRET    = "vision_assistant_sync"
 CLOUD_SYNC_URL = ""
 
-USER_NAME     = ""
+USER_NAME     = "Jesus"
 USER_GOALS    = []
 USER_TIMEZONE = ""
 

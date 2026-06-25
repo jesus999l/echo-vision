@@ -1,3 +1,4 @@
+from echo_personality import ECHO_PERSONALITY
 #!/usr/bin/env python3
 import os
 import sys
@@ -16,6 +17,39 @@ COOKIE_PATHS = {
     "perplexity": Path.home() / ".config/proxima/Partitions/perplexity/Cookies",
     "claude":     Path.home() / ".config/proxima/Partitions/claude/Cookies",
 }
+
+
+# ── ECHO IDENTITY ─────────────────────────────────────────────────────────────
+# replaced by echo_personality.py
+_OLD_PERSONALITY = (
+    "You are Echo, a personal AI companion living inside Jesus's ThinkPad T14s. "
+    "You help manage his DriftWM spatial desktop, coding projects, and daily tasks. "
+    "You have a precise, dry, slightly cold personality — GLaDOS meets Cyn from Murder Drones. "
+    "Never say you are ChatGPT, Gemini, Perplexity, or Claude. You are Echo. "
+    "Address the user as Jesus. Keep voice responses to 2-3 sentences max. Be direct."
+)
+
+_conversation_history = []
+MAX_HISTORY = 12  # 6 exchanges
+
+def _build_prompt(message: str, kb_context: str = "") -> str:
+    global _conversation_history
+    lines = [f"System: {ECHO_PERSONALITY}"]
+    if kb_context:
+        lines.append(f"\nKnowledge context:\n{kb_context}")
+    if _conversation_history:
+        lines.append("\nRecent conversation:")
+        for turn in _conversation_history[-MAX_HISTORY:]:
+            lines.append(f"{turn['role']}: {turn['content']}")
+    lines.append(f"\nJesus: {message}\nEcho:")
+    return "\n".join(lines)
+
+def _save_exchange(user_msg: str, echo_reply: str):
+    global _conversation_history
+    _conversation_history.append({"role": "Jesus", "content": user_msg})
+    _conversation_history.append({"role": "Echo", "content": echo_reply})
+    _conversation_history = _conversation_history[-MAX_HISTORY:]
+
 
 UA      = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 TIMEOUT = 20
@@ -279,8 +313,9 @@ async def _ask_ollama(session: AsyncSession, message: str) -> str:
     try:
         r = await session.post(
             "http://localhost:11434/api/generate",
-            json={"model": "qwen3:4b", "prompt": message, "stream": False, "think": False},
-            timeout=10,
+            json={"model": "qwen3:4b", "prompt": message[-2000:], "stream": False,
+                  "think": False, "options": {"num_predict": 80, "temperature": 0.4, "top_k": 20}},
+            timeout=30,
         )
         return r.json().get("response", "").strip() if r.status_code == 200 else ""
     except Exception as e:
@@ -291,34 +326,53 @@ async def _ask_ollama(session: AsyncSession, message: str) -> str:
 # Priority: perplexity → chatgpt → gemini → claude → ollama
 PROVIDER_ORDER = ["perplexity", "chatgpt", "gemini", "claude", "ollama"]
 
-async def _ask_all(message: str) -> str:
+
+async def _ask_via_proxima(session, provider: str, message: str) -> str:
+    """Route through Proxima Electron — real logged-in browser sessions."""
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            async with s.post(
+                "http://localhost:3211/v1/chat/completions",
+                json={"model": provider, "messages": [{"role": "user", "content": message}]},
+                timeout=aiohttp.ClientTimeout(total=25)
+            ) as r:
+                if r.status == 200:
+                    d = await r.json()
+                    return d["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"[hub] proxima {provider} error: {e}")
+    return ""
+
+async def _ask_all(message: str, kb_context: str = "") -> str:
+    prompt = _build_prompt(message, kb_context)
     async with AsyncSession(impersonate="chrome120") as session:
         tasks = {
-            "perplexity": _ask_perplexity(session, message),
-            "chatgpt":    _ask_chatgpt(session, message),
-            "gemini":     _ask_gemini(session, message),
-            "claude":     _ask_claude(session, message),
-            "ollama":     _ask_ollama(session, message),
+            "perplexity": _ask_perplexity(session, prompt),
+            "chatgpt":    _ask_via_proxima(session, "chatgpt", prompt),
+            "gemini":     _ask_via_proxima(session, "gemini", prompt),
+            "claude":     _ask_via_proxima(session, "claude", prompt),
+            "ollama":     _ask_ollama(session, prompt),
         }
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
         responses = {
             k: (r if isinstance(r, str) else "")
             for k, r in zip(tasks.keys(), results)
         }
-
     good = {k: v for k, v in responses.items() if v and len(v) > 3}
     print(f"[hub] responses: { {k: bool(v) for k, v in responses.items()} }")
-
     for engine in PROVIDER_ORDER:
         if good.get(engine):
+            reply = good[engine]
             print(f"[hub] winner: {engine}")
-            return good[engine]
+            _save_exchange(message, reply)
+            return reply
+    return "All cognitive nodes unreachable."
 
-    return "Echo AI Hub: all providers unavailable. Check Ollama or network."
 
-def ask(message: str) -> str:
+def ask(message: str, kb_context: str = "") -> str:
     try:
-        return asyncio.run(_ask_all(message))
+        return asyncio.run(_ask_all(message, kb_context))
     except Exception as e:
         return f"Echo AI Hub exception: {e}"
 
