@@ -202,7 +202,16 @@ def run_action(action, ctx_data):
 
     elif action == "echo_idle":
         import json as _j
-        Path(ECHO_MODE_FILE).write_text(_j.dumps({"mode": "idle", "orbit": True}))
+        # Read current cursor canvas pos from echo_pos.json if available
+        try:
+            pos = _j.loads(Path("/tmp/echo_pos.json").read_text())
+            fx, fy = pos.get("canvas_x", 0.0), pos.get("canvas_y", 0.0)
+        except:
+            fx, fy = 0.0, 0.0
+        Path(ECHO_MODE_FILE).write_text(_j.dumps({
+            "mode": "idle", "orbit": True,
+            "frozen_x": fx, "frozen_y": fy
+        }))
         notify("Echo: Idle — zones orbit")
 
     elif action == "echo_free_roam":
@@ -212,16 +221,23 @@ def run_action(action, ctx_data):
 
     elif action == "echo_follow":
         import json as _j
-        Path(ECHO_MODE_FILE).write_text(_j.dumps({"mode": "follow_window", "orbit": False}))
-        notify("Echo: Following focused window")
+        Path(ECHO_MODE_FILE).write_text(_j.dumps({"mode": "follow_cursor", "orbit": False}))
+        notify("Echo: Following cursor")
 
     elif action == "talk_to_echo":
-        subprocess.Popen(
-            ["notify-send", "-t", "3000", "Echo", "Listening... (wake word active)"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # Touch the wake trigger file if it exists
-        wake_trigger = Path("/tmp/echo_wake_trigger")
-        wake_trigger.touch()
+        import shutil
+        # Ensure wake_word.py is running
+        result = subprocess.run(["pgrep", "-f", "wake_word.py"], capture_output=True)
+        if result.returncode != 0:
+            subprocess.Popen(
+                ["/home/jesus999l/vision_env/bin/python3",
+                 "/home/jesus999l/vision_assistant/wake_word.py"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            notify("Echo: Wake word started — listening")
+        else:
+            notify("Echo: Listening (wake word active)")
+        Path("/tmp/echo_wake_trigger").touch()
 
 def main():
     try: ctx_data = __import__("json").loads(Path(CTX_FILE).read_text())
@@ -281,7 +297,7 @@ def main():
         items.append(("  ── Echo ──", None, None))
         items.append(("  Echo Idle", "echo_idle", "#A020FF"))
         items.append(("  Echo Free Roam", "echo_free_roam", "#20C0FF"))
-        items.append(("  Echo Follow Window", "echo_follow", "#20FFC0"))
+        items.append(("  Echo Follow Cursor", "echo_follow", "#20FFC0"))
         items.append(("  Talk to Echo", "talk_to_echo", "#FF80FF"))
 
     d = Gtk.Dialog(title=title, flags=0)
