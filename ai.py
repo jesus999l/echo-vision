@@ -243,10 +243,20 @@ def _ask_vision(prompt, model, screenshot_path):
 def _ask_text(prompt, model, ocr_text="", screenshot_path=""):
     context     = build_context(ocr_text, screenshot_path)
     full_prompt = f"{context}\n\n{prompt}" if context else prompt
+    system      = build_system_prompt()
+    try:
+        from echo_proxima_bridge import ask, route_intent
+        intent  = route_intent(full_prompt)
+        result  = ask(full_prompt, intent=intent, system=system)
+        if result["text"]:
+            return result["text"]
+    except Exception as e:
+        pass
+    # Direct fallback to LLM_URL
     r = requests.post(LLM_URL,
                       json={"model": model,
                             "messages": [
-                                {"role": "system", "content": build_system_prompt()},
+                                {"role": "system", "content": system},
                                 {"role": "user",   "content": full_prompt},
                             ],
                             "max_tokens": 300},

@@ -8,6 +8,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gtk, GLib, Gdk, GtkLayerShell
 import subprocess, os, time
+from pathlib import Path
 
 PANEL_WIDTH    = 230
 COLLAPSED_W    = 6
@@ -449,6 +450,33 @@ class EchoChatWidget(Gtk.Box):
         launch_row.pack_start(echo_btn, True, True, 0)
         self.pack_start(launch_row, False, False, 0)
 
+        # Chat history log
+        self._history_file = Path('/tmp/echo_chat_history.txt')
+        self._last_bubble  = ''
+
+        # Load last 5 lines of history on startup
+        if self._history_file.exists():
+            lines = self._history_file.read_text().splitlines()
+            if lines:
+                self.resp_buf.set_text('\n---\n'.join(lines[-5:]))
+
+        # Poll /tmp/echo_bubble.txt for voice responses
+        GLib.timeout_add(900, self._poll_bubble)
+
+    def _poll_bubble(self):
+        try:
+            txt = Path('/tmp/echo_bubble.txt').read_text().strip()
+            if txt and txt != self._last_bubble:
+                self._last_bubble = txt
+                self.resp_buf.set_text(txt)
+                end = self.resp_buf.get_end_iter()
+                self.resp_view.scroll_to_iter(end, 0, False, 0, 0)
+                with self._history_file.open('a') as f:
+                    f.write(txt + '\n')
+        except Exception:
+            pass
+        return True  # keep polling
+
     def _send(self, *_):
         msg = self.entry.get_text().strip()
         if not msg:
@@ -474,9 +502,13 @@ class EchoChatWidget(Gtk.Box):
                 text = f"error: {e}"
             def update():
                 self.resp_buf.set_text(text)
-                # scroll to end
                 end = self.resp_buf.get_end_iter()
                 self.resp_view.scroll_to_iter(end, 0, False, 0, 0)
+                try:
+                    with self._history_file.open('a') as f:
+                        f.write(text + '\n')
+                except Exception:
+                    pass
             GLib.idle_add(update)
         threading.Thread(target=ask, daemon=True).start()
 
