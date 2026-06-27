@@ -426,7 +426,7 @@ class EchoChatWidget(Gtk.Box):
         self.entry.set_editable(True)
         self.entry.connect("activate", self._send)
         self.entry.connect("button-press-event", self._grab_focus)
-        self.entry.connect("focus-in-event", lambda w, e: w.grab_focus())
+        self.entry.connect("focus-out-event", self._release_focus)
         send_btn = Gtk.Button(label="▶")
         send_btn.get_style_context().add_class("echo-send")
         send_btn.connect("clicked", self._send)
@@ -514,6 +514,9 @@ class EchoChatWidget(Gtk.Box):
 
     def _grab_focus(self, widget, event):
         widget.grab_focus()
+        return False
+
+    def _release_focus(self, widget, event):
         return False
 
     def _mic(self, *_):
