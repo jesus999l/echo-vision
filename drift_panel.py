@@ -206,7 +206,7 @@ class DriftPanel:
         self.list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         scroll.add(self.list_box)
         self.body.pack_start(scroll, True, True, 0)
-        self.body.pack_start(EchoChatWidget(), False, False, 0)
+        self.body.pack_start(EchoChatWidget(win=self.win), False, False, 0)
 
         self.outer.pack_start(self.body, True, True, 0)
         self.outer.pack_end(self.toggle, False, False, 0)
@@ -394,8 +394,9 @@ class DriftPanel:
 
 
 class EchoChatWidget(Gtk.Box):
-    def __init__(self):
+    def __init__(self, win=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.win = win
         self.get_style_context().add_class("echo-section")
 
         lbl = Gtk.Label(label="◈ ECHO")
