@@ -19,6 +19,8 @@ Run: ~/vision_env/bin/python3 echo_observer.py
 """
 
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -58,11 +60,19 @@ def _persist(event: dict) -> None:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+def _atomic_write(path: Path, data: str):
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=path.parent, delete=False, suffix=".tmp"
+    ) as f:
+        f.write(data)
+        tmp = f.name
+    os.replace(tmp, path)
+
 def _narrate(event: dict) -> None:
     summary = event.get("summary", "").strip()
     if summary:
         try:
-            BUBBLE_FILE.write_text(summary)
+            _atomic_write(BUBBLE_FILE, summary)
         except OSError:
             pass
 

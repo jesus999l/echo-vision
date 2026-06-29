@@ -165,28 +165,30 @@ async def action_worker():
         args = action["args"]
 
         try:
+            executed = True
             if   tool == "show_notification":  _show_notification(args)
             elif tool == "move_shadow_cursor":  _move_cursor(args)
             elif tool == "navigate_zone":       _navigate_zone(args)
-            elif tool == "launch_application":  _launch_application(args)
-            elif tool == "open_url":            _open_url(args)
-            elif tool == "search_web":          _search_web(args)
+            elif tool == "launch_application":  executed = bool(_launch_application(args))
+            elif tool == "open_url":            executed = bool(_open_url(args))
+            elif tool == "search_web":          executed = bool(_search_web(args))
 
-            # Narrate AFTER successful execution
-            # (show_notification skips — it IS the narration)
-            if tool != "show_notification":
-                _narrate(tool, args)
+            if executed:
+                # Narrate AFTER successful execution
+                # (show_notification skips — it IS the narration)
+                if tool != "show_notification":
+                    _narrate(tool, args)
 
-            # Emit observation event
-            narration_fn = _NARRATIONS.get(tool)
-            summary = narration_fn(args) if narration_fn else f"{tool} executed."
-            await _emit({
-                "type":    "tool_execution",
-                "source":  "gemini_live",
-                "tool":    tool,
-                "success": True,
-                "summary": summary,
-            })
+                # Emit observation event
+                narration_fn = _NARRATIONS.get(tool)
+                summary = narration_fn(args) if narration_fn else f"{tool} executed."
+                await _emit({
+                    "type":    "tool_execution",
+                    "source":  "gemini_live",
+                    "tool":    tool,
+                    "success": True,
+                    "summary": summary,
+                })
 
         except Exception:
             pass  # silent — no SSD log writes
@@ -221,24 +223,27 @@ def _show_notification(args: dict):
 
 
 # ── System actions ─────────────────────────────────────────────────────────────
-def _launch_application(args: dict):
+def _launch_application(args: dict) -> bool:
     app = args.get("application", "").strip()
     if not app:
-        return
+        return False
     subprocess.Popen([app], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
-def _open_url(args: dict):
+def _open_url(args: dict) -> bool:
     url = args.get("url", "").strip()
     if not url.startswith(("http://", "https://")):
-        return  # silently drop non-http
+        return False  # silently drop non-http
     subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
-def _search_web(args: dict):
+def _search_web(args: dict) -> bool:
     query = args.get("query", "").strip()
     if not query:
-        return
+        return False
     url = f"{SEARXNG_URL}/search?q={urllib.parse.quote(query)}"
     subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
 
 
 # ── Gemini tool declarations (import into echo_live.py) ───────────────────────

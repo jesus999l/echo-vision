@@ -19,17 +19,15 @@ import os
 import sys
 from pathlib import Path
 
-# Load API key from secrets file if not in env
-_secrets = Path.home() / ".config" / "echo" / "secrets.env"
-if _secrets.exists() and not os.environ.get("GEMINI_API_KEY"):
-    for line in _secrets.read_text().splitlines():
-        if line.startswith("GEMINI_API_KEY="):
-            os.environ["GEMINI_API_KEY"] = line.split("=", 1)[1].strip()
-
 sys.path.insert(0, str(Path(__file__).parent))
+from secrets_loader import get_valid_gemini_key, validate_api_key, load_secrets
 from tool_router import submit_tool_call, action_worker, TOOL_DECLARATIONS
 
-API_KEY = os.environ.get("GEMINI_API_KEY", "")
+try:
+    API_KEY = get_valid_gemini_key()
+except ValueError as e:
+    API_KEY = ""
+    print(f"[echo_live] WARNING: {e}")
 
 SYSTEM_PROMPT = (
     "You are Echo, an AI companion living inside DriftWM, a custom Wayland compositor. "
@@ -58,7 +56,7 @@ async def session_loop():
 
     asyncio.create_task(action_worker())
 
-    client = genai.Client(api_key=API_KEY, http_options={"api_version": "v1alpha"})
+    client = genai.Client(api_key=API_KEY, http_options={"api_version": "v1beta"})
 
     config = types.LiveConnectConfig(
         response_modalities=["TEXT"],
