@@ -1,0 +1,52 @@
+{
+  "move_shadow_cursor": {
+    "enabled": true,
+    "requires_confirmation": false,
+    "description": "Move Echo's sprite to a screen position"
+  },
+  "show_notification": {
+    "enabled": true,
+    "requires_confirmation": false,
+    "description": "Write a message to Echo's speech bubble"
+  },
+  "navigate_zone": {
+    "enabled": true,
+    "requires_confirmation": false,
+    "description": "Navigate to a named workspace zone"
+  },
+  "launch_application": {
+    "enabled": true,
+    "requires_confirmation": true,
+    "description": "Launch a Linux application by executable name"
+  },
+  "open_url": {
+    "enabled": true,
+    "requires_confirmation": false,
+    "description": "Open a URL in the default browser"
+  },
+  "search_web": {
+    "enabled": true,
+    "requires_confirmation": false,
+    "description": "Search the web via local SearXNG"
+  },
+  "focus_window": {
+    "enabled": false,
+    "requires_confirmation": true,
+    "description": "Ask DriftWM to focus a window by app_id"
+  },
+  "close_window": {
+    "enabled": false,
+    "requires_confirmation": true,
+    "description": "Close a window (not yet wired)"
+  },
+  "run_shell": {
+    "enabled": false,
+    "requires_confirmation": true,
+    "description": "Execute a shell command \u2014 kernel permission only"
+  },
+  "write_file": {
+    "enabled": false,
+    "requires_confirmation": true,
+    "description": "Write to disk \u2014 kernel permission only"
+  }
+}
