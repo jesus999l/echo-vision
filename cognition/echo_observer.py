@@ -54,10 +54,28 @@ def _should_persist(event: dict) -> bool:
     return False
 
 
+_last_signatures = []
+
+def _is_duplicate(event: dict) -> bool:
+    # Exclude timestamp for duplicate comparison
+    event_copy = {k: v for k, v in event.items() if k != "timestamp"}
+    sig = json.dumps(event_copy, sort_keys=True)
+    if sig in _last_signatures:
+        return True
+    _last_signatures.append(sig)
+    if len(_last_signatures) > 20:
+        _last_signatures.pop(0)
+    return False
+
+
 def _persist(event: dict) -> None:
-    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with MEMORY_FILE.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    try:
+        MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with MEMORY_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+            f.flush()
+    except OSError:
+        pass  # Never crash the observer daemon over write failure
 
 
 def _atomic_write(path: Path, data: str):
@@ -78,6 +96,8 @@ def _narrate(event: dict) -> None:
 
 
 def _process(event: dict) -> None:
+    if _is_duplicate(event):
+        return
     _narrate(event)
     if _should_persist(event):
         _persist(event)
@@ -89,7 +109,10 @@ def run() -> None:
     # Seek to end of existing file so we don't replay old events on restart
     offset = 0
     if BUS_FILE.exists():
-        offset = BUS_FILE.stat().st_size
+        try:
+            offset = BUS_FILE.stat().st_size
+        except OSError:
+            pass
 
     while True:
         try:
@@ -98,15 +121,22 @@ def run() -> None:
                 if current_size > offset:
                     with BUS_FILE.open("r", encoding="utf-8") as f:
                         f.seek(offset)
-                        for line in f:
-                            line = line.strip()
-                            if line:
+                        while True:
+                            line = f.readline()
+                            if not line:
+                                break
+                            if not line.endswith("\n"):
+                                # Partial line — stop and wait for writer to complete
+                                break
+
+                            offset += len(line.encode("utf-8"))
+                            line_str = line.strip()
+                            if line_str:
                                 try:
-                                    event = json.loads(line)
+                                    event = json.loads(line_str)
                                     _process(event)
                                 except json.JSONDecodeError:
                                     pass
-                    offset = current_size
 
                 elif current_size < offset:
                     # File was truncated/rotated

@@ -38,32 +38,13 @@ def emit(event: dict) -> None:
 
     line = json.dumps(event, ensure_ascii=False) + "\n"
 
-    # Atomic append via temp file in same dir (tmpfs)
-    tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            dir="/tmp",
-            delete=False,
-            suffix=".evt",
-            encoding="utf-8",
-        ) as f:
-            f.write(line)
-            tmp_path = f.name
-
-        # Open bus in append mode and write atomically
+        # Direct atomic append via O_APPEND mode on tmpfs
         with open(BUS_FILE, "a", encoding="utf-8") as bus:
-            with open(tmp_path, "r", encoding="utf-8") as src:
-                bus.write(src.read())
-
+            bus.write(line)
+            bus.flush()
     except OSError:
         pass  # Never crash the caller over observation
-    finally:
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
 
 async def emit_async(event: dict) -> None:

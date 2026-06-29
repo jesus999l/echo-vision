@@ -23,11 +23,18 @@ else
     nohup "$VENV/python3" "$VA/echo_proxima_native.py" --port 3210 \
         </dev/null >> /tmp/echo_proxima.log 2>&1 &
     disown 2>/dev/null || true
-    sleep 3
-    if curl -sf http://localhost:3210/ -o /dev/null 2>/dev/null; then
+    READY=0
+    for i in {1..10}; do
+        if curl -sf http://localhost:3210/ -o /dev/null 2>/dev/null; then
+            READY=1
+            break
+        fi
+        sleep 1
+    done
+    if [ $READY -eq 1 ]; then
         echo "  ✓ Proxima native running"
     else
-        echo "  ⚠ Proxima native failed — check /tmp/echo_proxima.log"
+        echo "  ⚠ Proxima native starting slowly or failed — check /tmp/echo_proxima.log"
         echo "    (Electron Proxima: DISPLAY=:0 cd ~/Proxima && npm start &)"
     fi
 fi
@@ -104,7 +111,12 @@ else
     disown 2>/dev/null || true
     echo "  ✓ Task manager started"
 fi
-cd ~/odysseus && nohup ~/odysseus/venv/bin/python -m uvicorn app:app --host 0.0.0.0 --port 7000 </dev/null >> /tmp/odysseus.log 2>&1 & disown
+if pgrep -f "uvicorn app:app" > /dev/null; then
+    echo "  ✓ Odysseus already running"
+else
+    (cd "$HOME/odysseus" && nohup "$HOME/odysseus/venv/bin/python" -m uvicorn app:app --host 0.0.0.0 --port 7000 </dev/null >> /tmp/odysseus.log 2>&1 &)
+    echo "  ✓ Odysseus started"
+fi
 
 # ── Echo Shadow Cursor ────────────────────────────────────────────────────────
 if pgrep -f "echo_shadow_cursor" > /dev/null; then
