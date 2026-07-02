@@ -300,7 +300,13 @@ def parse_task(prompt, model=None):
                                   "temperature": 0.0,
                                   "think": False},
                             timeout=30)
-        resp = r.json(); raw = (resp.get("message") or resp["choices"][0]["message"])["content"].strip()
+        resp = r.json()
+        raw = (resp.get("message") or resp["choices"][0]["message"])["content"].strip()
+        if "</think>" in raw:
+            raw = raw.split("</think>")[-1].strip()
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end > start:
+            raw = raw[start:end+1]
         # strip think tags (qwen3)
         if "</think>" in raw:
             raw = raw.split("</think>")[-1].strip()

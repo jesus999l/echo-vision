@@ -28,4 +28,4 @@ USER_TIMEZONE = ""
 WHISPER_MODEL_PATH = "/home/jesus999l/whisper-base-ct2"
 
 TASK_LLM_URL    = "http://127.0.0.1:11434/api/chat"
-TASK_MODEL      = "qwen3:4b"
+TASK_MODEL      = "qwen2.5:0.5b"
