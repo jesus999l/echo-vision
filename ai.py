@@ -288,20 +288,31 @@ Respond ONLY with a JSON object:
 _BLOCKED_CMDS = ["rm -rf", "mkfs", "dd if=", ":(){ :|:& };:", "> /dev/"]
 
 def parse_task(prompt, model=None):
-    model = model or DEFAULT_MODEL
+    from config import TASK_LLM_URL, TASK_MODEL
     try:
-        r   = requests.post(LLM_URL,
-                            json={"model": model,
+        r   = requests.post(TASK_LLM_URL,
+                            json={"model": TASK_MODEL,
                                   "messages": [
                                       {"role": "system", "content": _TASK_SYSTEM},
                                       {"role": "user",   "content": prompt},
                                   ],
-                                  "max_tokens": 256},
+                                  "max_tokens": 256,
+                                  "temperature": 0.0,
+                                  "think": False},
                             timeout=30)
-        raw = r.json()["choices"][0]["message"]["content"].strip()
+        resp = r.json(); raw = (resp.get("message") or resp["choices"][0]["message"])["content"].strip()
+        # strip think tags (qwen3)
+        if "</think>" in raw:
+            raw = raw.split("</think>")[-1].strip()
+        # strip code fences
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"): raw = raw[4:]
+        raw = raw.strip()
+        # extract first JSON object
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end > start:
+            raw = raw[start:end+1]
         return json.loads(raw)
     except Exception as e:
         print(f"[ai] task parse error: {e}")

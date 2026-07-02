@@ -12,7 +12,7 @@ try:
 except ImportError:
     pass
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn, datetime
@@ -28,6 +28,32 @@ class ChatRequest(BaseModel):
 class TaskRequest(BaseModel):
     title: str
     description: str = ""
+class RunRequest(BaseModel):
+    message: str
+    source: str = "api"
+ECHO_TOKEN = os.environ.get("ECHO_RUN_TOKEN", "")
+
+@app.post("/run")
+def run_command(req: RunRequest,
+                authorization: str | None = Header(default=None),
+                x_echo_token: str | None = Header(default=None)):
+    token = x_echo_token or (authorization or "").removeprefix("Bearer ").strip()
+    if ECHO_TOKEN and token != ECHO_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    try:
+        import ai, uuid, json as _json
+        from pathlib import Path as _Path
+        parsed = ai.parse_task(req.message)
+        task_id = str(uuid.uuid4())[:8]
+        queue = _Path.home() / "queue"
+        queue.mkdir(exist_ok=True)
+        (_Path(queue) / f"task_{task_id}.json").write_text(
+            _json.dumps({"id": task_id, "source": req.source,
+                         "message": req.message, "parsed": parsed}))
+        return {"ok": True, "task_id": task_id, "parsed": parsed}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/")
 def root():

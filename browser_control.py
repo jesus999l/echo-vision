@@ -9,6 +9,17 @@ _ACTION_LOG_PATH = os.path.expanduser("~/vision_assistant/browser_action_log.jso
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 def _run(cmd):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True)
+def _safe_open(url: str):
+    """Open a URL after validating scheme. Blocks non-http/https."""
+    from urllib.parse import urlparse
+    scheme = urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        _log_action("blocked_url", url)
+        return False
+    _run(f"xdg-open {url!r}")
+    _log_action("open_url", url)
+    return True
+
 
 def _log_action(action, detail=""):
     try:
