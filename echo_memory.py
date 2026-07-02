@@ -6,8 +6,8 @@ import hashlib, json, time
 from pathlib import Path
 import chromadb
 
-CHROMA_PATH = Path.home() / ".chromadb" / "echo_conversations"
-COLLECTION  = "conversations"
+CHROMA_PATH = Path.home() / "vision_assistant" / "chroma_db"
+COLLECTION  = "echo_memory"
 EMBED_MODEL = "nomic-embed-text"
 OLLAMA_EMBED = "http://127.0.0.1:11434/api/embed"
 
@@ -17,10 +17,14 @@ def _client():
 
 def _embed(text):
     try:
-        from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
-        ef = DefaultEmbeddingFunction()
-        return ef([text])[0]
-    except Exception as e:
+        import urllib.request, json as _json
+        payload = _json.dumps({"model": EMBED_MODEL, "input": text}).encode()
+        req = urllib.request.Request(
+            OLLAMA_EMBED, data=payload,
+            headers={"Content-Type": "application/json"})
+        resp = _json.loads(urllib.request.urlopen(req, timeout=10).read())
+        return resp["embeddings"][0]
+    except Exception:
         return None
 
 def _collection():

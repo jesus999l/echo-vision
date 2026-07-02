@@ -299,6 +299,12 @@ class ControlHandler(BaseHTTPRequestHandler):
 
 import re  # needed for /task slug
 
+try:
+    from cognition.echo_heartbeat import start_heartbeat
+    start_heartbeat("echo_task_manager")
+except ImportError:
+    pass
+
 def start_control_server():
     server = HTTPServer(("127.0.0.1", PORT), ControlHandler)
     t = threading.Thread(target=server.serve_forever, daemon=True)

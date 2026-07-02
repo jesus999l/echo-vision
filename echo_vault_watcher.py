@@ -17,6 +17,12 @@ from datetime import datetime
 from collections import defaultdict
 from threading import Timer
 
+try:
+    from cognition.echo_heartbeat import start_heartbeat
+    start_heartbeat("echo_vault_watcher")
+except ImportError:
+    pass
+
 # ── CONFIG ────────────────────────────────────────────────────────────
 
 VAULT        = Path.home() / "Documents/ObsidianVault/Echo"

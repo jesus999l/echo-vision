@@ -25,6 +25,14 @@ Usage:
 import os, sys, re, json, logging, urllib.request, urllib.error
 from pathlib import Path
 
+# ── Heartbeat (discoverability) ──────────────────────────────────────────────
+try:
+    sys.path.insert(0, str(Path(__file__).parent / "cognition"))
+    from echo_heartbeat import start_heartbeat
+    start_heartbeat("echo_proxima_bridge")
+except ImportError:
+    pass
+
 # ── CONFIG ────────────────────────────────────────────────────────────
 
 PROXIMA_URL   = "http://localhost:3211"

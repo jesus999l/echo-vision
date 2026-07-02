@@ -5,6 +5,12 @@ from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
+try:
+    from cognition.echo_heartbeat import start_heartbeat
+    start_heartbeat("echo_proxima_native")
+except ImportError:
+    pass
+
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("echo-proxima")
 engine = os.environ.get("WHISPER_ENGINE", "openai")

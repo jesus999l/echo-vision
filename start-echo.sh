@@ -13,6 +13,14 @@ echo "║         Echo Stack Launcher          ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
+# ── 0. Ollama Local Runtime Check ─────────────────────────────────────────────
+if curl -sf http://localhost:11434/ -o /dev/null 2>/dev/null; then
+    echo "  ✓ Ollama local runtime is available on :11434"
+else
+    echo "  ⚠ Ollama is not responding on :11434 — local LLM queries will fallback to Proxima"
+fi
+echo ""
+
 # ── 1. Echo Proxima Native (:3210) — OpenAI-compatible router, no Electron ───
 if curl -sf http://localhost:3210/ -o /dev/null 2>/dev/null; then
     echo "  ✓ Proxima native already running on :3210"

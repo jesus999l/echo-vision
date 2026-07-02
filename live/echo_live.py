@@ -23,6 +23,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 from secrets_loader import get_valid_gemini_key, validate_api_key, load_secrets
 from tool_router import submit_tool_call, action_worker, TOOL_DECLARATIONS
 
+# ── Heartbeat (discoverability) ──────────────────────────────────────────────
+try:
+    sys.path.insert(0, str(Path(__file__).parent.parent / "cognition"))
+    from echo_heartbeat import start_heartbeat
+    start_heartbeat("echo_live")
+except ImportError:
+    pass
+
 try:
     API_KEY = get_valid_gemini_key()
 except ValueError as e:

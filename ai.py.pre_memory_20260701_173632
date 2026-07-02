@@ -10,7 +10,6 @@ from memory import (
     get_habits, complete_habit, add_habit, delete_habit,
     save_journal_entry,
 )
-from echo_memory import recall as _vault_recall
 
 # ── MODELS ────────────────────────────────────────────────────────────────────
 def is_vision_model(model_name):
@@ -101,21 +100,11 @@ Only add <action> when actually changing data."""
     if _guidelines:
         prompt += f"\n\nUser instructions:\n{_guidelines}"
     return prompt
-def build_context(ocr_text="", screenshot_path="", query=""):
+def build_context(ocr_text="", screenshot_path=""):
     parts = []
     memory = build_memory_context()
     if memory:
         parts.append(memory)
-    if query:
-        try:
-            semantic = _vault_recall(query, n=3)
-            if semantic:
-                parts.append(
-                    "[Vault context:]\n" +
-                    "\n".join(x["content"] for x in semantic)
-                )
-        except Exception:
-            pass
 
     recent = get_recent_messages(limit=10)
     if recent:
@@ -252,7 +241,7 @@ def _ask_vision(prompt, model, screenshot_path):
     return r.json()["message"]["content"]
 
 def _ask_text(prompt, model, ocr_text="", screenshot_path=""):
-    context     = build_context(ocr_text, screenshot_path, query=prompt)
+    context     = build_context(ocr_text, screenshot_path)
     full_prompt = f"{context}\n\n{prompt}" if context else prompt
     system      = build_system_prompt()
     try:

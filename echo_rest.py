@@ -6,6 +6,12 @@ Port 8765. Run: python3 echo_rest.py
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
+try:
+    from cognition.echo_heartbeat import start_heartbeat
+    start_heartbeat("echo_rest")
+except ImportError:
+    pass
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel

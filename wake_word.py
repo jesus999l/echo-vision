@@ -12,6 +12,12 @@ import sounddevice as sd
 import numpy as np
 from vosk import Model, KaldiRecognizer
 
+try:
+    from cognition.echo_heartbeat import start_heartbeat
+    start_heartbeat("wake_word")
+except ImportError:
+    pass
+
 SOUNDDEVICE_INDEX = 17
 SAMPLE_RATE = 16000
 BLOCK_SIZE = 4000

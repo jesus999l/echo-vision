@@ -10,6 +10,16 @@ import asyncio, aiohttp, json, time, re
 from flask import Flask, request, jsonify
 import threading
 
+# ── Heartbeat (discoverability) ──────────────────────────────────────────────
+import sys
+from pathlib import Path
+try:
+    sys.path.insert(0, str(Path(__file__).parent / "cognition"))
+    from echo_heartbeat import start_heartbeat
+    start_heartbeat("echo_brainbridge")
+except ImportError:
+    pass
+
 PROXIMA_URL = "http://localhost:3211"
 OLLAMA_URL  = "http://localhost:11434"
 
