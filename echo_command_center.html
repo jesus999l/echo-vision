@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Echo Command Center</title>
+<style>
+  :root{
+    --void:#0A0E14;
+    --panel:#10161F;
+    --panel-raised:#141B26;
+    --line:#1E2A38;
+    --text:#D7E3EC;
+    --text-dim:#6B7C8F;
+    --text-faint:#3E4B5C;
+    --cyan:#3FD0E0;
+    --cyan-dim:rgba(63,208,224,0.15);
+    --magenta:#FF3D7F;
+    --magenta-dim:rgba(255,61,127,0.15);
+    --green:#4ADE80;
+    --amber:#FBBF24;
+    --red:#F86363;
+    --mono:'JetBrains Mono','Fira Code',ui-monospace,'Cascadia Code','SF Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:var(--void);
+    color:var(--text);
+    font-family:var(--sans);
+    min-height:100vh;
+    padding:20px;
+    background-image:
+      radial-gradient(circle at 20% -10%, rgba(63,208,224,0.06), transparent 40%),
+      radial-gradient(circle at 90% 110%, rgba(255,61,127,0.05), transparent 40%);
+  }
+  ::selection{background:var(--cyan-dim);}
+
+  .wrap{max-width:1400px;margin:0 auto;display:flex;flex-direction:column;gap:16px;}
+
+  /* ── Top bar ─────────────────────────── */
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 20px;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  }
+  .brand{display:flex;align-items:center;gap:12px;}
+  .brand-mark{
+    width:34px;height:34px;border-radius:50%;
+    border:2px solid var(--cyan);position:relative;flex-shrink:0;
+    box-shadow:0 0 16px var(--cyan-dim);
+  }
+  .brand-mark::after{
+    content:'';position:absolute;inset:8px;border-radius:50%;
+    background:var(--cyan);opacity:.5;animation:breathe 3s ease-in-out infinite;
+  }
+  @keyframes breathe{0%,100%{opacity:.3;transform:scale(.85);}50%{opacity:.7;transform:scale(1);}}
+  .brand-text .name{font-family:var(--mono);font-weight:700;font-size:15px;letter-spacing:2px;}
+  .brand-text .sub{font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:1px;}
+  .top-right{display:flex;align-items:center;gap:20px;font-family:var(--mono);font-size:11px;color:var(--text-dim);}
+  .clock{color:var(--text);}
+  .conn-dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;margin-right:6px;box-shadow:0 0 6px var(--green);}
+  .conn-dot.down{background:var(--red);box-shadow:0 0 6px var(--red);}
+
+  /* ── Panel shell ─────────────────────── */
+  .panel{
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:16px 18px;
+  }
+  .panel-title{
+    font-family:var(--mono);font-size:11px;letter-spacing:1.5px;color:var(--text-dim);
+    text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;
+  }
+
+  /* ── Metrics row ─────────────────────── */
+  .metrics-row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;}
+  .gauge-card{
+    background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:14px;display:flex;align-items:center;gap:12px;
+  }
+  .gauge-card svg{flex-shrink:0;}
+  .gauge-label{font-family:var(--mono);font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;}
+  .gauge-value{font-family:var(--mono);font-size:20px;font-weight:700;line-height:1;margin-top:4px;}
+  .gauge-sub{font-family:var(--mono);font-size:9px;color:var(--text-faint);margin-top:3px;}
+
+  /* ── Main grid ───────────────────────── */
+  .main-grid{display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start;}
+
+  /* Services */
+  .service-row{
+    display:flex;align-items:center;gap:10px;padding:8px 4px;
+    border-bottom:1px solid var(--line);font-family:var(--mono);font-size:12px;
+  }
+  .service-row:last-child{border-bottom:none;}
+  .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+  .dot.green{background:var(--green);box-shadow:0 0 6px var(--green);}
+  .dot.yellow{background:var(--amber);box-shadow:0 0 6px var(--amber);}
+  .dot.red{background:var(--red);opacity:.6;}
+  .service-name{flex:1;color:var(--text);}
+  .service-port{color:var(--text-faint);font-size:10px;}
+  .services-summary{font-family:var(--mono);font-size:11px;color:var(--cyan);}
+
+  /* Pipeline */
+  .pipeline-canvas-wrap{position:relative;height:120px;margin-bottom:12px;}
+  canvas#pipelineWave{width:100%;height:100%;display:block;}
+  .pipeline-stages{
+    display:flex;justify-content:space-between;font-family:var(--mono);
+    font-size:9px;color:var(--text-faint);letter-spacing:.5px;text-transform:uppercase;
+    padding:0 4px;
+  }
+  .pipeline-status{
+    display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;
+    color:var(--text-dim);margin-bottom:10px;
+  }
+  .pipeline-status .state-tag{
+    padding:2px 8px;border-radius:4px;font-size:10px;letter-spacing:1px;
+    background:var(--cyan-dim);color:var(--cyan);border:1px solid rgba(63,208,224,.3);
+  }
+  .pipeline-status .state-tag.thinking{
+    background:var(--magenta-dim);color:var(--magenta);border-color:rgba(255,61,127,.4);
+  }
+
+  /* Chat — the center of the application */
+  .chat-panel{grid-column:1 / -1;}
+  .chat-log{
+    height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;
+    padding:4px 4px 12px;margin-bottom:12px;
+  }
+  .chat-log::-webkit-scrollbar{width:6px;}
+  .chat-log::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px;}
+  .msg{max-width:70%;padding:10px 14px;border-radius:10px;font-size:13px;line-height:1.5;}
+  .msg.user{align-self:flex-end;background:var(--panel-raised);border:1px solid var(--line);}
+  .msg.echo{align-self:flex-start;background:var(--cyan-dim);border:1px solid rgba(63,208,224,.25);}
+  .msg.error{align-self:flex-start;background:var(--magenta-dim);border:1px solid rgba(255,61,127,.3);color:var(--text);}
+  .msg .meta{font-family:var(--mono);font-size:9px;color:var(--text-faint);margin-top:5px;letter-spacing:.5px;}
+  .chat-input-row{display:flex;gap:10px;}
+  .chat-input-row input{
+    flex:1;background:var(--void);border:1px solid var(--line);border-radius:8px;
+    padding:12px 14px;color:var(--text);font-family:var(--sans);font-size:13px;outline:none;
+  }
+  .chat-input-row input:focus{border-color:var(--cyan);}
+  .chat-input-row button{
+    background:var(--cyan);color:var(--void);border:none;border-radius:8px;
+    padding:0 20px;font-family:var(--mono);font-weight:700;font-size:12px;
+    letter-spacing:1px;cursor:pointer;transition:opacity .15s;
+  }
+  .chat-input-row button:hover{opacity:.85;}
+  .chat-input-row button:disabled{opacity:.4;cursor:default;}
+  .chat-empty{
+    font-family:var(--mono);font-size:11px;color:var(--text-faint);
+    text-align:center;margin-top:100px;letter-spacing:.5px;
+  }
+
+  .footer{
+    font-family:var(--mono);font-size:10px;color:var(--text-faint);
+    text-align:center;padding:8px;letter-spacing:.5px;
+  }
+
+  @media (max-width:900px){
+    .metrics-row{grid-template-columns:repeat(2,1fr);}
+    .main-grid{grid-template-columns:1fr;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-text">
+        <div class="name">ECHO</div>
+        <div class="sub">COMMAND CENTER</div>
+      </div>
+    </div>
+    <div class="top-right">
+      <span><span class="conn-dot" id="connDot"></span><span id="connLabel">CONNECTING</span></span>
+      <span class="clock" id="clock">--:--:--</span>
+    </div>
+  </div>
+
+  <div class="metrics-row" id="metricsRow"></div>
+
+  <div class="main-grid">
+    <div class="panel" id="servicesPanel">
+      <div class="panel-title">Services <span class="services-summary" id="svcSummary">-- / --</span></div>
+      <div id="servicesList"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">AI Pipeline</div>
+      <div class="pipeline-status">
+        <span>STATE</span>
+        <span class="state-tag" id="pipelineState">IDLE</span>
+        <span id="pipelineLatency" style="margin-left:auto;"></span>
+      </div>
+      <div class="pipeline-canvas-wrap">
+        <canvas id="pipelineWave"></canvas>
+      </div>
+      <div class="pipeline-stages">
+        <span>You</span><span>Vision</span><span>Router</span><span>Proxima/Ollama</span><span>Memory</span><span>Response</span>
+      </div>
+    </div>
+
+    <div class="panel chat-panel">
+      <div class="panel-title">Chat</div>
+      <div class="chat-log" id="chatLog">
+        <div class="chat-empty">— no messages yet —</div>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" placeholder="Type a command or message for Echo…" />
+        <button id="chatSend">SEND</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">ECHO OS · LOCAL-FIRST · PRIVATE · <span id="apiBase">http://localhost:8766</span></div>
+</div>
+
+<script>
+const API = "http://localhost:8766";
+
+// ── Clock ─────────────────────────────────────────
+function tickClock(){
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('en-US',{hour12:false});
+}
+setInterval(tickClock,1000); tickClock();
+
+// ── Gauge rendering ───────────────────────────────
+const GAUGES = [
+  {key:'cpu', label:'CPU', unit:'%', get:(m)=>m.cpu?.percent, sub:(m)=>`${(m.cpu?.per_core||[]).length} cores`},
+  {key:'ram', label:'RAM', unit:'%', get:(m)=>m.ram?.percent, sub:(m)=>`${m.ram?.used_gb}/${m.ram?.total_gb} GB`},
+  {key:'disk', label:'Disk', unit:'%', get:(m)=>m.disk?.percent, sub:(m)=>`${m.disk?.used_gb}/${m.disk?.total_gb} GB`},
+  {key:'temp', label:'Temp', unit:'°C', get:(m)=>m.temps?.cpu, sub:()=>'package'},
+  {key:'batt', label:'Battery', unit:'%', get:(m)=>m.battery?.percent, sub:(m)=>m.battery?.charging ? 'charging' : 'discharging'},
+];
+
+function arcSVG(pct, color){
+  pct = Math.max(0, Math.min(100, pct||0));
+  const r=22, c=2*Math.PI*r;
+  const offset = c * (1 - pct/100);
+  return `<svg width="56" height="56" viewBox="0 0 56 56">
+    <circle cx="28" cy="28" r="${r}" fill="none" stroke="var(--line)" stroke-width="5"/>
+    <circle cx="28" cy="28" r="${r}" fill="none" stroke="${color}" stroke-width="5"
+      stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${offset}"
+      transform="rotate(-90 28 28)" style="transition:stroke-dashoffset .5s ease;"/>
+  </svg>`;
+}
+
+function renderMetrics(m){
+  const row = document.getElementById('metricsRow');
+  row.innerHTML = GAUGES.map(g=>{
+    const val = g.get(m);
+    const display = (val===undefined || val===null) ? '—' : Math.round(val*10)/10;
+    const color = val > 85 ? 'var(--magenta)' : 'var(--cyan)';
+    return `<div class="gauge-card">
+      ${arcSVG(val, color)}
+      <div>
+        <div class="gauge-label">${g.label}</div>
+        <div class="gauge-value">${display}${(val!==undefined && val!==null) ? g.unit : ''}</div>
+        <div class="gauge-sub">${g.sub(m) || ''}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Services ──────────────────────────────────────
+function renderServices(data){
+  const list = document.getElementById('servicesList');
+  document.getElementById('svcSummary').textContent = `${data.running} / ${data.total}`;
+  list.innerHTML = (data.services||[]).map(s=>`
+    <div class="service-row">
+      <span class="dot ${s.status}"></span>
+      <span class="service-name">${s.name}</span>
+      ${s.port ? `<span class="service-port">:${s.port}</span>` : ''}
+    </div>
+  `).join('');
+}
+
+// ── Pipeline waveform ─────────────────────────────
+const waveCanvas = document.getElementById('pipelineWave');
+const waveCtx = waveCanvas.getContext('2d');
+let waveState = 'idle'; // idle | thinking
+let waveT = 0;
+
+function resizeCanvas(){
+  const rect = waveCanvas.getBoundingClientRect();
+  waveCanvas.width = rect.width * devicePixelRatio;
+  waveCanvas.height = rect.height * devicePixelRatio;
+  waveCtx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
+window.addEventListener('resize', resizeCanvas);
+
+function drawWave(){
+  const w = waveCanvas.getBoundingClientRect().width;
+  const h = waveCanvas.getBoundingClientRect().height;
+  waveCtx.clearRect(0,0,w,h);
+  const midY = h/2;
+  const color = waveState === 'thinking' ? '#FF3D7F' : '#3FD0E0';
+  const amp = waveState === 'thinking' ? 22 : 4;
+  const freq = waveState === 'thinking' ? 0.09 : 0.03;
+  const speed = waveState === 'thinking' ? 0.35 : 0.06;
+
+  waveCtx.beginPath();
+  waveCtx.strokeStyle = color;
+  waveCtx.lineWidth = 2;
+  waveCtx.shadowColor = color;
+  waveCtx.shadowBlur = 8;
+  for(let x=0; x<=w; x+=2){
+    const y = midY + Math.sin(x*freq + waveT) * amp * Math.sin(x/w*Math.PI);
+    if(x===0) waveCtx.moveTo(x,y); else waveCtx.lineTo(x,y);
+  }
+  waveCtx.stroke();
+  waveT += speed;
+  requestAnimationFrame(drawWave);
+}
+resizeCanvas();
+requestAnimationFrame(drawWave);
+
+function renderPipeline(p){
+  const tag = document.getElementById('pipelineState');
+  waveState = p.state === 'thinking' ? 'thinking' : 'idle';
+  tag.textContent = (p.state||'idle').toUpperCase();
+  tag.className = 'state-tag' + (waveState==='thinking' ? ' thinking' : '');
+  const lat = document.getElementById('pipelineLatency');
+  lat.textContent = p.last_latency_ms ? `last: ${p.last_latency_ms} ms` : '';
+}
+
+// ── Chat ──────────────────────────────────────────
+const chatLog = document.getElementById('chatLog');
+const chatInput = document.getElementById('chatInput');
+const chatSend = document.getElementById('chatSend');
+let firstMessageSent = false;
+
+function addMsg(text, cls, meta){
+  if(!firstMessageSent){ chatLog.innerHTML=''; firstMessageSent = true; }
+  const div = document.createElement('div');
+  div.className = `msg ${cls}`;
+  div.innerHTML = `<div>${text}</div>${meta ? `<div class="meta">${meta}</div>` : ''}`;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+async function sendChat(){
+  const text = chatInput.value.trim();
+  if(!text) return;
+  addMsg(text, 'user');
+  chatInput.value = '';
+  chatSend.disabled = true;
+  try{
+    const res = await fetch(`${API}/api/chat`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({message:text})
+    });
+    const data = await res.json();
+    if(data.error){
+      addMsg(`Error: ${data.error}`, 'error');
+    } else {
+      addMsg(data.reply, 'echo', `${data.latency_ms} ms`);
+    }
+  }catch(e){
+    addMsg(`Connection error: ${e.message}`, 'error');
+  }
+  chatSend.disabled = false;
+}
+chatSend.addEventListener('click', sendChat);
+chatInput.addEventListener('keydown', e=>{ if(e.key==='Enter') sendChat(); });
+
+// ── Polling loop ──────────────────────────────────
+let connected = false;
+function setConn(ok){
+  if(ok===connected) return;
+  connected = ok;
+  document.getElementById('connDot').className = 'conn-dot' + (ok ? '' : ' down');
+  document.getElementById('connLabel').textContent = ok ? 'ONLINE' : 'OFFLINE';
+}
+
+async function poll(){
+  try{
+    const [m, s, p] = await Promise.all([
+      fetch(`${API}/api/metrics`).then(r=>r.json()),
+      fetch(`${API}/api/services`).then(r=>r.json()),
+      fetch(`${API}/api/pipeline`).then(r=>r.json()),
+    ]);
+    renderMetrics(m);
+    renderServices(s);
+    renderPipeline(p);
+    setConn(true);
+  }catch(e){
+    setConn(false);
+  }
+}
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>

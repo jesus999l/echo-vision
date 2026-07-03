@@ -14,14 +14,18 @@ pattern as echo_rest.py.
 """
 import json
 import os
+import sys
 import time
 import subprocess
+import threading
 from pathlib import Path
 
 import psutil
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+sys.path.insert(0, os.path.expanduser("~/vision_assistant"))
 
 app = FastAPI(title="Echo Dashboard API")
 
@@ -66,12 +70,15 @@ def _is_running(pattern: str) -> bool:
 
 
 def _read_heartbeats(max_age_seconds: int = 30) -> dict:
-    """Read /tmp/echo_events.jsonl and return {service: last_seen_ts}."""
+    """Read /tmp/echo_events.jsonl and return {source: last_seen_ts}.
+
+    Real schema confirmed from live file:
+        {"type": "pong", "source": "echo_rest", "ping_id": "...", "timestamp": 1783042576.58}
+    """
     beats = {}
     if not HEARTBEAT_FILE.exists():
         return beats
     try:
-        # Tail the file — it can grow, so just read last ~200 lines
         with HEARTBEAT_FILE.open("r") as f:
             lines = f.readlines()[-200:]
         for line in lines:
@@ -79,10 +86,12 @@ def _read_heartbeats(max_age_seconds: int = 30) -> dict:
                 evt = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            svc = evt.get("service") or evt.get("name")
-            ts = evt.get("ts") or evt.get("timestamp")
-            if svc and ts:
-                beats[svc] = max(beats.get(svc, 0), ts)
+            if evt.get("type") != "pong":
+                continue
+            src = evt.get("source")
+            ts = evt.get("timestamp")
+            if src and ts:
+                beats[src] = max(beats.get(src, 0), ts)
     except Exception:
         pass
     return beats
@@ -178,6 +187,67 @@ def services():
 @app.get("/api/health")
 def health():
     return JSONResponse({"ok": True, "ts": time.time()})
+
+
+# ── Pipeline state (coarse, for now) ─────────────────────────────────────────
+# NOTE: this only reflects requests made THROUGH this dashboard's /api/chat.
+# It does not see voice/wake_word triggered requests, because ai.py has no
+# stage instrumentation yet. Real per-stage state (memory_recall, routing,
+# executing) requires adding write_pipeline_stage() calls inside ai.py's
+# ask()/_ask_text()/execute_task() — that's a core-file change, do it as a
+# separate deliberate step, not bundled into this dashboard patch.
+_pipeline_lock = threading.Lock()
+_pipeline_state = {
+    "state": "idle",       # idle | thinking
+    "last_prompt": None,
+    "last_latency_ms": None,
+    "last_updated": time.time(),
+}
+
+
+def _set_pipeline_state(**kwargs):
+    with _pipeline_lock:
+        _pipeline_state.update(kwargs)
+        _pipeline_state["last_updated"] = time.time()
+
+
+@app.get("/api/pipeline")
+def pipeline():
+    with _pipeline_lock:
+        snapshot = dict(_pipeline_state)
+
+    # Real, checkable service status — same logic as /api/services, just
+    # the subset relevant to the AI pipeline specifically.
+    snapshot["services"] = {
+        "ollama": _is_running("ollama serve") or _is_running("ollama"),
+        "proxima": _is_running("echo_proxima_native") or _is_running("electron"),
+        "memory": Path(os.path.expanduser(
+            "~/vision_assistant/chroma_db"
+        )).exists(),
+    }
+    return snapshot
+
+
+@app.post("/api/chat")
+def api_chat(data: dict = Body(...)):
+    prompt = (data.get("message") or "").strip()
+    if not prompt:
+        return JSONResponse({"error": "empty message"}, status_code=400)
+
+    _set_pipeline_state(state="thinking", last_prompt=prompt)
+    start = time.time()
+    try:
+        # Same pipeline every other Echo client uses — no reimplementation.
+        from ai import chat as echo_chat
+        reply = echo_chat(prompt)
+    except Exception as e:
+        _set_pipeline_state(state="idle", last_latency_ms=None)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    latency_ms = round((time.time() - start) * 1000)
+    _set_pipeline_state(state="idle", last_latency_ms=latency_ms)
+
+    return {"reply": reply, "latency_ms": latency_ms}
 
 
 if __name__ == "__main__":
