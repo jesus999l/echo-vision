@@ -21,3 +21,4 @@ browser_action_log.json
 data/
 models/
 model_fixed/
+chroma_db/
